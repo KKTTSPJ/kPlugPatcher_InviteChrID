@@ -112,8 +112,9 @@ customs.RemoveAll(c => c == null || c.trs == null);
 ```
 
 `FindBones()` should not be called every frame if the bones are not there yet (the body may still be loading); a short wait between tries is enough.
+Wait only after a try that did not fix them. The same character can be reloaded again on the very next frame (clicking the coordinate button quickly), and a wait after a successful repair gives an NRE on every frame of the wait.
 
-**Patch.** Prefixes do exactly the above. `FindBones()` is retried at most 3 times, 60 frames apart; the core bones are checked every frame, the others every 10 frames.
+**Patch.** Prefixes do exactly the above. `FindBones()` is retried at most 3 times, 60 frames apart, only while a try does not fix them; a successful repair resets the wait (1.11.2), so a reload right after a repair is fixed at once. The core bones are checked every frame, the others every 10 frames.
 
 ## 3. `BellyCtrl` after a character swap
 
@@ -138,7 +139,7 @@ NullReferenceException
 - In `LateUpdate` (or right after `SwapBellyValues`), if a `Bone.t` is destroyed, find the bone by name in the character again and replace only `t`; keep the base values.
 - Fix the `waist2` / `waist1` pair in `SwapBellyValues`.
 
-**Patch.** A prefix on `LateUpdate` re-finds destroyed bones with kPlug's own `ChaTools.FindInCha` (3 tries, 60 frames apart); a prefix on `LerpInflation` skips a bone whose `t` is missing. The `SwapBellyValues` typo is **not** changed by the patch.
+**Patch.** A prefix on `LateUpdate` re-finds destroyed bones with kPlug's own `ChaTools.FindInCha` (3 tries, 60 frames apart while a try does not fix them; reset after a successful repair); a prefix on `LerpInflation` skips a bone whose `t` is missing. The `SwapBellyValues` typo is **not** changed by the patch.
 
 ## 4. Face material is used without a null check
 

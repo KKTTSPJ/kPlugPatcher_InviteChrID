@@ -52,7 +52,7 @@ namespace kPlugPatcher_InviteChrID
         private const string LegacyGuid = "com.your.kkp.kplugpatcher";
         public const string PluginName = "KKP kPlug Patcher Invite ChrID";
 #endif
-        public const string Version = "1.11.0";
+        public const string Version = "1.11.2";
 
         internal static new ManualLogSource Logger;
         internal static bool IsQuitting = false;

@@ -11,7 +11,7 @@ The patch and the document are MIT-licensed, so any part of them can be taken in
 
 - Games: `Koikatu` / `KoikatuVR` (`kPlugPatcher_InviteChrID.dll`), `Koikatsu Party` / `Koikatsu Party VR` (`kPlugPatcher_InviteChrID_KKP.dll`)
 - kPlug versions: 3.5.6 (tested in game, normal and VR) and 3.6.3 including the 2026-10-19 update (patches applied in normal and VR; the newer API is detected by type, not by version number)
-- Version: 1.11.0
+- Version: 1.11.2
 
 ## What it fixes
 
@@ -19,7 +19,7 @@ The patch and the document are MIT-licensed, so any part of them can be taken in
 |---|---|
 | Inviting the same card twice breaks leaving / name-based actions; a card with the main girl's name is not listed | Copy and rename the invited card in memory ("Name (1)"); show same-name cards |
 | Invite does nothing for the rest of the H scene | Find the main girl's destroyed bones again before `SpotManager.AdaptCaliber` |
-| NRE every frame after a coordinate reload or a swap (`ColDefsManager`, `BindersCtrl`, `BonesCtrl`, `BellyCtrl`) | Remove destroyed entries / find the bones again |
+| NRE every frame after a coordinate reload or a swap (`ColDefsManager`, `BindersCtrl`, `BonesCtrl`, `BellyCtrl`) | Remove destroyed entries / find the bones again (since 1.11.2 also right after a previous repair, e.g. when the coordinate button is clicked quickly) |
 | Orgasm repeats while the gauge is empty (game `ParentObjectCtrl`, game `MotionIK` with null IK targets from kPlug) | Skip destroyed items / null targets (game patches) |
 | NRE every frame in ahegao for characters without a face material | Skip only the material call |
 | Several GB of memory per H scene (invite menu loads every card fully) | Keep a light card in the list and load the full card when inviting |

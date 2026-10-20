@@ -50,6 +50,8 @@ namespace kPlugPatcher_InviteChrID
     ///   周辺フィールドは <see cref="DetectionIntervalFrames"/> フレームおきに検査する。
     /// - **FindBones() の呼び出しには回数制限とクールダウンを設ける。** FindBones は全 Transform を
     ///   総なめするため重く、破棄が解消しない状況で毎フレーム呼ぶと実質フリーズする。
+    ///   クールダウンは直らなかったときだけ効かせ、直ったとき・健全に戻ったときは戻す。復旧の直後にまた壊れたとき
+    ///   （短い間隔で続けて着替えたとき）に待つと、その間ずっと NRE が出るため（2026-10-20 のログで 37 件・59 件×5。1.11.1 / 1.11.2）。
     /// - リフレクション情報は型ごとの辞書で持つ（kPlug と kPlugVR で上書きし合う事故を防ぐ）。
     /// - Prefix は例外を外へ出さない。回避策が原因で kPlug 側を壊すことだけは避ける。
     /// </summary>
@@ -58,7 +60,10 @@ namespace kPlugPatcher_InviteChrID
         /// <summary>周辺フィールド（腕・脚・指など）を検査する間隔。中核フィールドは毎フレーム検査する。</summary>
         private const int DetectionIntervalFrames = 10;
 
-        /// <summary>FindBones() の再呼び出しを許可するまでの最小フレーム数。</summary>
+        /// <summary>
+        /// 復旧を試みても直らなかったとき、次に FindBones() を呼ぶまでの最小フレーム数。
+        /// 直ったとき・健全に戻ったときは待ちを戻す（復旧の後にまた壊れたときは待たない。1.11.1 / 1.11.2）。
+        /// </summary>
         private const int RepairCooldownFrames = 60;
 
         /// <summary>同一インスタンスに対する FindBones() の最大試行回数。超えたら諦めて警告を出す。</summary>
@@ -542,9 +547,12 @@ namespace kPlugPatcher_InviteChrID
 
                 if (destroyed.Count == 0)
                 {
-                    // 健全に戻ったら、次に壊れたときのためリセットする
+                    // 健全に戻ったら、次に壊れたときのためリセットする。待ち（NextRepairFrame）も戻し、
+                    // 復旧の直後にまた壊れたとき（短い間隔で続けて着替えたとき）は待たずに直す（1.11.1）。
+                    // 待ちは、FindBones を呼んでも直らないときの連打を防ぐためだけに使う。
                     state.Attempts = 0;
                     state.GaveUp = false;
+                    state.NextRepairFrame = 0;
                     return;
                 }
 
@@ -573,7 +581,10 @@ namespace kPlugPatcher_InviteChrID
                 var stillDestroyed = CollectDestroyed(info, __instance, fullCheck: true);
                 if (stillDestroyed.Count == 0)
                 {
+                    // 直ったら待ちもここで戻す。復旧した次のフレームでもう次の着替えが走ると、健全な分岐を
+                    // 一度も通らずにまた壊れるため、健全な分岐で戻すだけでは 60 フレーム待ってしまう（1.11.2）
                     state.Attempts = 0;
+                    state.NextRepairFrame = 0;
                     PatcherPlugin.Logger.LogInfo(
                         $"[StaleRefFix][BonesCtrl] owner={owner} の破棄済みボーンを復旧しました: {string.Join(", ", destroyed.ToArray())}");
                 }
@@ -665,8 +676,10 @@ namespace kPlugPatcher_InviteChrID
 
                 if (destroyed.Count == 0)
                 {
+                    // BonesCtrl と同じく、待ちも戻して次の破棄は待たずに直す（1.11.1）
                     state.Attempts = 0;
                     state.GaveUp = false;
+                    state.NextRepairFrame = 0;
                     return;
                 }
 
@@ -711,7 +724,9 @@ namespace kPlugPatcher_InviteChrID
                 var still = CollectDestroyedBelly(info, __instance);
                 if (still.Count == 0)
                 {
+                    // BonesCtrl と同じく、直ったら待ちもここで戻す（1.11.2）
                     state.Attempts = 0;
+                    state.NextRepairFrame = 0;
                     PatcherPlugin.Logger.LogInfo(
                         $"[StaleRefFix][BellyCtrl] owner={owner} の破棄済みボーンを復旧しました: {string.Join(", ", destroyed.ToArray())}");
                 }

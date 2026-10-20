@@ -48,6 +48,7 @@
 - **液体の模様のコピーの NRE の抑止 (v1.10.5、`EnableCopyLiquidMapGuard`)**: kPlug の `ChaTools.CopyLiquidMapToMat()` は、体・顔の液体（汁）の模様をメインヒロインのマテリアルから写すときに、写し元・写し先のマテリアル（`customMatFace` / `customMatBody`）を null チェックせずに使います。顔の素材を指定していない顔 MOD のキャラがいると、Hシーン開始時に NRE が1〜4件出て、呼び出し元（`DickBehavior.Start()`）の残りも飛んでいました。どちらかが null のときだけコピーを飛ばし、「コピーしなかった」（false）を返します。VR・通常モードの両方が対象。KK の通常モードの実機で、この NRE が 0件になり、液体の表示が変わらないことを確認済み（2026-10-11）。
 - **IK の目標が null になって起きる絶頂ループの回避 (v1.10.6、`EnableExtraAnimIkTargetGuard` / `EnableMotionIKNullTargetGuard`)**: kPlug の追加アニメーション（`ToolExtrAnimIK.SetIkTargets`）は、アニメーションの切り替えのたびに手足の IK の目標をキャラの中から名前で探して付け直しますが、見つからないと null をそのまま入れます。キャラの骨格が一時的にキャラの外にあると（例: KK_SetParentVR で男の位置を動かしている間）、ゲーム本体の `MotionIK.LinkIK` がアニメーションの切り替え（`HActionBase.SetPlay`）の途中で例外になり、絶頂の終了処理が飛んで絶頂が繰り返されていました（絶頂ループ）。kPlug 側では null にされた目標を元に戻し（`IkHook.Create` もフック先が null なら作らない）、ゲーム本体側の安全網として、目標が null の手足だけを飛ばしてアニメーションの切り替えを最後まで実行させます。後者は**ゲーム本体(Assembly-CSharp)へのパッチ**です。VR・通常モードの両方が対象。kPlugVR の実機で適用を確認済み（2026-10-19）。絶頂ループが起きた条件はまだ再現できておらず、効果は未確認です。
 - **キャラ交代後のお腹の膨らみの毎フレーム NRE の回避 (v1.10.7、`EnableBellyCtrlStaleBoneFix`)**: kPlug の `BellyCtrl`（妊娠設定が有効なときのお腹の膨らみ）は、骨（`cf_s_waist01/02`・`cf_s_spine01/02`）を初期化時に一度だけ取得し、取り直す処理を持ちません。キャラ交代（`AI_Public.IE_SwapGirls`）で2人の骨の階層が作り直されると、破棄済みの骨に書き込み続けて毎フレーム NRE になります（kPlugVR で1セッション 2,376 件）。破棄済みの骨だけを kPlug 自身の `ChaTools.FindInCha()` で探し直して差し替えます。復旧できるまでの間は、その骨の書き込みだけを飛ばします。`EnableCoordinateChangeStaleRefFix` も有効なときに働きます。kPlug・kPlugVR の両方が対象。kPlugVR の実機で NRE 0 件・復旧のログを確認済み（2026-10-19。お腹の見た目と通常モードでの交代は未確認）。
+- **続けて着替えたときの骨の復旧の待ちをなくす (v1.11.2)**: `BonesCtrl`・`BellyCtrl` の破棄済みの骨の復旧は、直らないときに FindBones を毎フレーム呼ばないよう次の試行まで 60 フレーム待ちますが、復旧に成功した後もこの待ちが残っていました。そのため、同じキャラの着替えボタンを続けて押すと、2回目以降は待つ間 `BonesCtrl.LateUpdate` の NRE が毎フレーム出ていました。復旧に成功したとき・骨が健全に戻ったときに待ちを戻すようにしました（待つのは直らなかったときだけ）。KK の通常モードの実機で、続けて着替えて 53 回復旧し、この NRE が 0 件（修正前は 295 件）になったことを確認済み（2026-10-20）。VR・KKP は未確認です。
 - **GUID の変更と、通常モードのログの整理 (v1.11.0)**: GUID を `kkttspj.kk.kplugpatcher` / `kkttspj.kkp.kplugpatcher` に変え、1.10.x までの設定ファイルを初回の起動で引き継ぎます（§7）。通常モードで kPlugVR の型へのパッチが当たらないとき（kPlugVR のクラスをロードできないため。実害はありません）のログを、Error から Info に下げました。
 - **招待キャラの表情のコルーチンの NRE の診断 (v1.10.2、`EnableSetFaceNreDiagnostics`)**: 読み取り専用の診断（既定は無効）。kPlug の `FaceCtrl.IE_SetFace` が NullReferenceException を出したときだけ、キャラ名・表情の種類・アヘ顔の状態と、コルーチンがたどる参照（`ai.Cha`、`Core.config`、`hProc.voice.faceLists[0]`、`mouthCtrl`、`customMatFace` など）が null かどうかをログ出力します。例外は抑止しません。
 - **性能・メモリの診断 (v1.6.1〜、`KPlugMemoryDiagnostics` / `KPlugPerfDiagnostics`)**: 読み取り専用の診断。
@@ -176,5 +177,5 @@ KK版（`Release_KK`）と KKP版（`Release_KKP`）が両方ビルドされ、`
 - 本プラグインは kPlug の動作を実行時に書き換えます。**kPlug のバージョンが変わると対象のメソッドが見つからず、機能の一部または全部が無効になることがあります**（その場合はログに理由が出ます）。
 
 ---
-作成日時: 2026年6月11日 / 最終更新: 2026年10月20日 (v1.11.0)
+作成日時: 2026年6月11日 / 最終更新: 2026年10月20日 (v1.11.2)
 作成者: Gemini CLI / Claude Opus 5
