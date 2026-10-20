@@ -1,0 +1,102 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net35</TargetFramework>
+    <!-- DLL のプロパティ（ファイル/製品バージョン）を PatcherPlugin.Version と揃えるため、そこから読み取る（値を書く場所は PatcherPlugin.cs だけ）。 -->
+    <Version>$([System.Text.RegularExpressions.Regex]::Match($([System.IO.File]::ReadAllText('$(MSBuildProjectDirectory)\PatcherPlugin.cs')), 'const string Version = "([0-9.]+)"').Groups[1].Value)</Version>
+    <Product>kPlug Patcher Invite ChrID</Product>
+    <!-- 製品バージョンに git のコミット ID を付けない -->
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+    <AllowUnsafeBlocks>True</AllowUnsafeBlocks>
+    <GenerateAssemblyInfo>True</GenerateAssemblyInfo>
+    <EnableDefaultItems>False</EnableDefaultItems>
+  </PropertyGroup>
+
+  <!--
+    KK/KKPでゲームごとに個別ビルドする理由 (analysis/KK_KKP_COMPATIBILITY.md 参照):
+    KKP は Assembly-CSharp 等のクラス名競合が多く global:: 修飾が必要になるケースがあり、
+    KK向けにコンパイルしたものをそのまま流用すると不整合の余地がある。
+    KAV (KK_AlternativeVoice) と同じ構成パターンを踏襲する。
+  -->
+  <PropertyGroup Condition="'$(Configuration)' == 'Release_KK'">
+    <AssemblyName>kPlugPatcher_InviteChrID</AssemblyName>
+    <DefineConstants>KK</DefineConstants>
+    <GameManagedPath>..\..\Koikatu_Data\Managed</GameManagedPath>
+    <Optimize>true</Optimize>
+    <DebugType>None</DebugType>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)' == 'Release_KKP' Or '$(Configuration)' == 'Debug' Or '$(Configuration)' == 'Release'">
+    <AssemblyName>kPlugPatcher_InviteChrID_KKP</AssemblyName>
+    <DefineConstants>KKP</DefineConstants>
+    <GameManagedPath>..\..\Koikatsu Party_Data\Managed</GameManagedPath>
+    <Optimize>true</Optimize>
+    <DebugType>None</DebugType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="PatcherPlugin.cs" />
+    <Compile Include="InviteCardRename.cs" />
+    <Compile Include="InviteListSameNameUnblock.cs" />
+    <Compile Include="SpotManagerBonesFix.cs" />
+    <Compile Include="InviteUIDiagnostics.cs" />
+    <Compile Include="HStartCtxDiagnostics.cs" />
+    <Compile Include="HSceneCategoryDiagnostics.cs" />
+    <Compile Include="CoordinateChangeStaleRefDiagnostics.cs" />
+    <Compile Include="CoordinateChangeStaleRefFix.cs" />
+    <Compile Include="ParentObjectCtrlStaleRefFix.cs" />
+    <Compile Include="MotionIKNullTargetGuard.cs" />
+    <Compile Include="KPlugVRNullGuards.cs" />
+    <Compile Include="SpotCtrlAdaptColDiagnostics.cs" />
+    <Compile Include="VRInviteMenuUnblock.cs" />
+    <Compile Include="LazyInviteCardList.cs" />
+    <Compile Include="InviteCardDiagnostics.cs" />
+    <Compile Include="KPlugMemoryDiagnostics.cs" />
+    <Compile Include="KPlugPerfDiagnostics.cs" />
+    <Compile Include="DynamicBoneThrottle.cs" />
+    <Compile Include="HVoiceCachingShortBreathFix.cs" />
+    <Compile Include="HVoiceCachingVoiceListFix.cs" />
+    <Compile Include="FaceListReloadOnSwap.cs" />
+    <Compile Include="FaceCtrlSetFaceDiagnostics.cs" />
+    <Compile Include="MultiGuestKiss.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Include="BepInEx">
+      <HintPath>..\..\BepInEx\core\BepInEx.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="0Harmony">
+      <HintPath>..\..\BepInEx\core\0Harmony.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="UnityEngine">
+      <HintPath>$(GameManagedPath)\UnityEngine.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <!--
+      kPlug.dll は意図的に参照しない。
+      kPlug(非VR) と kPlugVR は同名クラスを別名前空間に持つ完全に独立した実装であり、
+      片方を静的参照すると、もう一方のモードで実行されたときに黙って動かなくなる。
+      実際に InviteCardPatch が kPlug.Core を静的参照していたためVRモードで
+      改名処理が一度も動いていなかった（analysis/INVITECARD_VR_CORE_MISMATCH_20260803.md）。
+      kPlug の型へのアクセスは全てリフレクション＋型ごとの辞書で行うこと。
+      参照を復活させると同じ事故を再発させうるため、追加しないこと。
+    -->
+    <!-- ChaFileControl / ChaFile を型として扱うために必要 (招待カードの複製・改名処理) -->
+    <Reference Include="Assembly-CSharp">
+      <HintPath>$(GameManagedPath)\Assembly-CSharp.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <!-- FaceListCtrl の基底クラス SerializedMonoBehaviour（FaceListReloadOnSwap で FaceListCtrl を扱うために必要） -->
+    <Reference Include="Sirenix.Serialization">
+      <HintPath>$(GameManagedPath)\Sirenix.Serialization.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <!-- MessagePack（キャラカードの BlockHeader の読み込み。LazyInviteCardList の部分読み込みで使う） -->
+    <Reference Include="Assembly-CSharp-firstpass">
+      <HintPath>$(GameManagedPath)\Assembly-CSharp-firstpass.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+  </ItemGroup>
+</Project>
