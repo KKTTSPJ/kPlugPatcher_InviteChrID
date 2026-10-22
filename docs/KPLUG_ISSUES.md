@@ -8,6 +8,7 @@ The goal is to make it easy to fix them in kPlug itself, so that this patch is n
 - Names are given for kPlug (`kPlug.*`). kPlugVR (`kPlugVR.*`) has the same code unless noted.
 - Versions: most issues were found and tested with **kPlug 3.5.6** (normal and VR). The patch was then run with **kPlug 3.6.3** (including the 2026-10-19 update, normal and VR).
   For each issue, "3.6.3" says whether the same code is still there, and whether we saw the problem in a 3.6.3 log.
+  #14–#17 were found later with kPlug / kPlugVR 3.6.3 (2026-10-21).
 - Stack traces come from real play logs. Koikatu's Mono does not print IL offsets for methods that are not patched (`[0x00000]`), so most stacks below have none.
   Where an offset is given, it was checked against the IL of that build.
 - Games: Koikatu and Koikatsu Party with BepInEx 5, normal and VR. The test setup has a few hundred character cards and many mods.
@@ -29,6 +30,10 @@ The goal is to make it easy to fix them in kPlug itself, so that this patch is n
 | 11 | kPlugVR 3.5.6 only: `VRCtrl.SetMenuVisibility`, `VRCtrl.LateUpdate`, `HinputParser.Chain`, `HCtrl.ParseTouchables` | One NRE at H start / per kiss | missing null check | **fixed or removed in 3.6.3** | `KPlugVRNullGuards.cs` (skipped automatically on 3.6.3) |
 | 12 | Game `ParentObjectCtrl`, game `MotionIK`, DynamicBone, HVoiceCaching | Orgasm loop, frame rate, H scene stuck at loading | not kPlug (triggered or made worse by kPlug) | — | §12 |
 | 13 | Smaller NREs (not patched) | One exception each time | kPlug, mostly missing null checks | see §13 | not patched |
+| 14 | kPlugVR 3.599+ VR invite menu (`MenuInvite.InitFileList`) | +11–13 GB at every VR character select (250 cards); out of memory the second time | memory | found in 3.6.3 VR | `LazyInviteCardList.cs` / `EnableVRMenuInvite` |
+| 15 | Invite menu face textures (`InviteUI.Start`, `MenuInvite.GetChaInfoList`) | Hundreds of MB of GPU and CPU memory; normal mode: kept after H, even on the title screen | memory | found in 3.6.3 | `InviteUIFaceShrink.cs`, `MenuInviteFaceShrink.cs` / `ShrinkInviteMenuFaces`, `ReleaseInviteMenuFaces`, `ShrinkVRMenuFaces` |
+| 16 | kPlugVR 3.599+ VR menus (world-space Canvas) | Transparent clothes behind a menu are drawn over it; the invite menu flickers | draw order | found in 3.6.3 VR | `VRMenuFlickerDiagnostics.cs` / `DrawMenusOnTop`, `Method` |
+| 17 | `CmpChara.KokanBehavior` | Unity warning "Infinity or NaN … for a Collider" every frame during insertion (tens of thousands per session) | division by frame time | found in 3.6.3 VR | `KokanNaNGuard.cs` / `EnableKokanNaNGuard` |
 
 ## Common cause of #1–#3 (and of several in #13)
 
@@ -267,7 +272,7 @@ The same happens for the male list (buddy invite).
 **Suggested fix.** Keep only the card path, name, personality and face image in the list, and load the full card when the player invites it.
 
 **Patch.** The list gets a light card (full-body image, face image and parameters only, read directly from the file); the full card is loaded at `Dealer.InviteCard` / `InviteBuddy`.
-Result in normal mode: Mono peak 5.4 GB → 1.75 GB; menu build about 1 s and +410 MB. kPlugVR 3.599 and later use a new invite menu; the patch does not change it, and we have not measured it.
+Result in normal mode: Mono peak 5.4 GB → 1.75 GB; menu build about 1 s and +410 MB. kPlugVR 3.599 and later use a new invite menu in VR; see §14.
 
 ## 10. VR kiss with invited girls (`HCtrl.ParseTouchables`)
 
@@ -293,6 +298,8 @@ The patch checks the IL and does nothing on versions where the method is gone or
 - **Game `MotionIK.LinkIK`** (§5): the same kind of failure inside `SetPlay`.
 - **DynamicBone with many invited girls.** With 5 girls, DynamicBone took about 60% of the frame time; it also runs up to 3 times per frame when the frame is slow, which makes it worse. The patch stops DynamicBones of invited girls and buddies and caps all DynamicBones to 1 update per frame (5 girls: 123–172 ms → 28–37 ms per frame, normal mode).
   A kPlug option to freeze the hair/skirt bones of invited girls would do the same.
+  Separately, the game's DynamicBone recomputes the world position and radius of every collider for every particle, so the cost grows with "particles × colliders" (about 0.6 µs per pair; a hair with 233 particles and 41 colliders took about 6 ms per frame).
+  The patch computes them once per DynamicBone update and reuses them (`DynamicBoneColliderCache.cs`; same results, 0 differences when compared in normal mode and VR). This is game code; nothing for kPlug to change.
 - **HVoiceCaching 0.3** (third-party plugin): kPlug's swap calls `HVoiceCtrl.Init` again, which made HVoiceCaching throw (duplicate keys) and stop the rest of `IE_SwapGirls`; and a 3P H scene could stay on the loading screen. Fixed in the patch (`HVoiceCaching*Fix.cs`); nothing for kPlug to change.
 
 ## 13. Smaller NREs (not patched)
@@ -434,6 +441,72 @@ Same code in kPlug and kPlugVR 3.6.3. Only seen with another plugin that moves t
 
 With 3.5.6, at about 2 of 3 H scene exits, many kPlug components (`InviteUI.OnGUI`, `KokanBehavior`, `AI_Main.TakeControlOnNeck`, `HComboCtrl`, `ToolSpot.GetPlayerDir` …) threw for a few frames after the H scene was unloaded.
 With 3.6.3 we saw it once in 7 exits (3 frames). It looks mostly fixed; it is listed only for completeness.
+
+## 14. kPlugVR 3.599+: the VR invite menu loads every card fully at every character select
+
+**What the player sees.** In VR, each time the character select screen opens, the game stops for about 20 s and memory grows by 11–13 GB (250 girl cards). The second time it doubled (27 GB) and the game ran out of memory and closed.
+
+**Cause.** kPlugVR 3.599 and later build the VR invite list in `MenuInvite.InitFileList()`, called when `VRDealer.SetContext(Context.HSelect)` opens the character select.
+It loads every card fully with `kFileParser.GetGirlCardList` / `GetMaleCardList` (including extended data) and keeps them in the static lists `girlInfos` / `boyInfos` (`ChaInfo.file`) until the next character select.
+This is the same problem as §9, now in the new VR menu. Normal mode in 3.6.3 still uses `InviteUI.Start`, which the §9 patch handles.
+
+**Suggested fix.** As in §9: keep the path, name, personality and face image in `ChaInfo`, and load the full card only where it is needed:
+`MenuInvite.InviteSomeone` (before the card is copied with `CopyAll` and passed to `InviteInVR`) and `MenuInvite.TryToReloadDefAppearence` (which copies `idAndChaFile[id].file`).
+The main characters (id 0 / 1) are registered from the list in `InitAndTabAndInfoInH`, so they need the full card too. `InitAndTabAndInfoInH` also changes `parameter.personality` / `voiceRate` of the list entry for darkness, so a reloaded card needs the same values.
+
+**Patch.** `InitFileList()` runs with the light, partial card load of §9 (VR process only). Before `InviteSomeone` and `TryToReloadDefAppearence`, `ChaInfo.file` itself is replaced with the full card, and the darkness values are copied over.
+Result in KK VR: about 1.1–1.6 s and +1 GB per character select, and repeated character selects no longer run out of memory.
+
+## 15. Invite menu face textures: full card size, with a CPU copy, and kept after H
+
+**What the player sees.** Nothing visible, but memory: about 250 cards use about 300 MB of GPU memory plus about 300 MB of CPU memory for the face images of the invite menu. In normal mode they stay after H, even on the title screen.
+
+**Cause.**
+- Normal mode: `InviteUI.Start()` makes each face image with `PngAssist.ChangeTextureFromByte(pngData, imageW, imageH)` and puts it in `faces` / `dateFaces` / `otherFaces` / `maleFaces`.
+  The texture is made with `LoadImage`, so it keeps the card image size (756x1056 for high-resolution cards), has mipmaps and stays readable, which keeps a CPU copy of every image.
+  The button only shows `imageW` x `imageH` (a quarter of the screen height x 0.7; 189x270 at 1080p).
+  `InviteUI.OnDestroy` does not destroy these textures, and the static `Core.inviteUi` still points to the old `InviteUI` after H, so the lists are not collected until the next H scene replaces it.
+- VR (3.599+): `MenuInvite.GetChaInfoList` makes `ChaInfo.face` the same way (card size, mipmaps, readable). In our setup 49 images at 756x1056 took about 198 MB and about 200 at 252x352 about 100 MB (GPU).
+
+**Suggested fix.**
+- Make the face texture at the display size (or scale it down once after loading), and call `Apply(true, true)` so the CPU copy is released (`Apply(false, true)` if it is already small enough).
+- Destroy the face textures in `InviteUI.OnDestroy`, and clear `Core.inviteUi` when H ends.
+
+**Patch.**
+- `ShrinkInviteMenuFaces` (normal mode): after `InviteUI.Start`, images larger than `imageW` x `imageH` are replaced by a scaled-down copy (same aspect ratio, mipmaps, not readable), and the CPU copy of the others is released.
+  `ReleaseInviteMenuFaces`: after `InviteUI.OnDestroy`, the four lists are destroyed and cleared.
+  Result in KK normal mode (3 H scenes including darkness, 253 cards each): GPU about 299 MB → 64 MB, CPU copy about 299 MB freed, and the textures are destroyed when leaving H. No visible difference.
+- `ShrinkVRMenuFaces` (VR): after `MenuInvite.InitFileList`, the same for `ChaInfo.face` with a 252x352 limit (before the menu builds its materials). GPU about 300 MB → 115 MB, no visible difference.
+
+## 16. kPlugVR 3.599+: VR menus are drawn under transparent parts of characters
+
+**What the player sees.** In VR, transparent clothes or hair of characters behind a kPlugVR menu are drawn over the menu. The invite menu also flickers (part of the face list or of the text disappears and comes back), more often while scrolling.
+
+**Cause.** The kPlugVR menus are world-space Canvases (`BaseMenu.frame.menuGo`, `sortingOrder` 0). uGUI does not write depth (`UI/Default` has `ZWrite Off`), so the menu is not hidden by depth; only the draw order decides.
+Transparent character parts (`renderQueue` 3000 or more) are drawn after the menu and appear on top of it even when they are behind it.
+Parts with the same queue (3000) are sorted by distance, so the order between them and the menu changes from frame to frame, which shows up as flicker.
+The patch's diagnostics showed no problem on the CPU side (text meshes, Canvas rendering, overlapping buttons, stencil settings) while the flicker was visible.
+
+**Suggested fix.** Make the menus draw after the characters. Raising the menu Canvas `sortingOrder` works, but then everything else in the transparent queue (for example the pointer ray in front of the menu, or other Canvases with a Mask) is drawn before the menu and can be hidden by it.
+Lowering the `sortingOrder` of the characters' transparent renderers instead keeps the order of everything else.
+
+**Patch.** `DrawMenusOnTop` with `Method = CharactersFirst` (default): the transparent renderers of characters get `sortingOrder` -1 (the player's silhouette shader `Custom/Silhouette` is left as is); they are set again after invites and map changes, and restored when the option is turned off.
+`Method = MenusLast` raises the menu Canvases to `sortingOrder` 30000 instead (the first attempt; it hid the pointer ray in front of the menu).
+Confirmed in KK VR with 9 girls and several map changes: no clothes over the menu, no flicker, and no problems with transparent parts of user maps.
+
+## 17. `KokanBehavior`: the `cf_j_kokan` scale becomes zero, negative or NaN
+
+**What the player sees.** During insertion (seen mostly in the doggy position `khs_f_81`), Unity logs "Infinity or NaN floating point numbers appear when calculating the transform matrix for a Collider" every frame, for `…/cf_j_kokan/Kokan_root/Kokan` (the sphere collider added by `ChaTools.AddColliders`). One VR session had 29,260 of these warnings, most of a 10 MB log.
+
+**Cause.** Every frame, `KokanBehavior` resets the scale of `cf_j_kokan` and, during insertion, adds a squash in `CalculateOverlap` from the movement of the man's hip in that frame (`pistonMag`) divided by `Time.deltaTime`.
+When `Time.deltaTime` is 0 the result is infinite or NaN, and when the movement in one frame is very large (the patch saw 11–28 m in one frame) the scale becomes zero or negative.
+The value is written to `cf_j_kokan.localScale`, so the child collider gets a broken scale. `OverlapDeformer.ApplyOverlap` uses the same value. The normal-mode kPlug has the same calculation.
+In our VR logs the main cause was frames with `Time.deltaTime` = 0 (13,775 and 40,450 calls in 30 s during insertion).
+
+**Suggested fix.** In `CalculateOverlap` / `ApplyOverlap`, skip the squash when `Time.deltaTime` is 0 or less, when `pistonMag` is not finite, or when the movement in one frame is unrealistically large; and clamp the resulting scale to a sane range.
+
+**Patch.** Exactly that: the squash is skipped for those calls (limit 0.15 m per frame), and after `KokanBehavior.LateUpdate` a non-finite or out-of-range scale (0.05–5) of `cf_j_kokan` is repaired.
+Result in KK VR: 0 warnings (the same kind of session had 29,260). We have not specifically checked how the doggy position looks with the patch.
 
 ## License of this document and the patch
 
