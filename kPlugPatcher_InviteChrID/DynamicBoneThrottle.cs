@@ -22,6 +22,9 @@ namespace kPlugPatcher_InviteChrID
     ///   2. LimitDynamicBoneIterations：すべてのキャラの DynamicBone / DynamicBone_Ver01 について、
     ///      1フレームあたりの計算回数を MaxIterationsPerFrame（既定1）までに抑える（悪循環を断つ）。
     ///      フレームレートが m_UpdateRate 以上なら元々1回以下なので、見た目は変わらない。
+    ///
+    /// v1.16.0: 1 はゲーム中に切り替えられるようにした（kPlug の型が見つかれば、設定が無効でも LateUpdate の Prefix を当て、Prefix の中で設定を見る）。
+    ///   招待キャラの揺れものを動かしたまま、DynamicBoneColliderCache でどこまで軽くなるかを比べるため。2 は従来どおり再起動で反映。
     /// </summary>
     internal static class DynamicBoneThrottle
     {
@@ -43,40 +46,34 @@ namespace kPlugPatcher_InviteChrID
             if (_applied) return;
             _applied = true;
 
-            bool disableInvited = PatcherPlugin.DisableInvitedDynamicBones.Value;
             bool limit = PatcherPlugin.LimitDynamicBoneIterations.Value;
-            if (!disableInvited && !limit)
-            {
-                PatcherPlugin.Logger.LogInfo($"{Tag} 設定で無効です。");
-                return;
-            }
+            bool guestPatch = true;
 
             try
             {
-                if (disableInvited)
+                // 通常モードで kPlugVR の型に深く触れると Mono がネイティブで落ちるため、動作中のモードのアセンブリだけを見る
+                string wanted = BepInEx.Paths.ProcessName.EndsWith("VR", StringComparison.OrdinalIgnoreCase) ? "kPlugVR" : "kPlug";
+                var asm = AppDomain.CurrentDomain.GetAssemblies().FirstOrDefault(a => a.GetName().Name == wanted);
+                if (asm != null)
                 {
-                    // 通常モードで kPlugVR の型に深く触れると Mono がネイティブで落ちるため、動作中のモードのアセンブリだけを見る
-                    string wanted = BepInEx.Paths.ProcessName.EndsWith("VR", StringComparison.OrdinalIgnoreCase) ? "kPlugVR" : "kPlug";
-                    var asm = AppDomain.CurrentDomain.GetAssemblies().FirstOrDefault(a => a.GetName().Name == wanted);
-                    if (asm != null)
-                    {
-                        _aiPublicType = asm.GetType(wanted + ".CmpH.AI_Public");
-                        _aiBuddyType = asm.GetType(wanted + ".CmpH.AI_Buddy");
-                    }
-                    if (_aiPublicType == null)
-                    {
-                        PatcherPlugin.Logger.LogWarning($"{Tag} {wanted}.CmpH.AI_Public が見つからないため、招待キャラの揺れものの停止は行いません。");
-                        disableInvited = false;
-                    }
+                    _aiPublicType = asm.GetType(wanted + ".CmpH.AI_Public");
+                    _aiBuddyType = asm.GetType(wanted + ".CmpH.AI_Buddy");
+                }
+                if (_aiPublicType == null)
+                {
+                    PatcherPlugin.Logger.LogWarning($"{Tag} {wanted}.CmpH.AI_Public が見つからないため、招待キャラの揺れものの停止は行いません。");
+                    guestPatch = false;
                 }
 
-                var pre = new HarmonyMethod(typeof(DynamicBoneThrottle).GetMethod(nameof(LateUpdatePrefix), BindingFlags.NonPublic | BindingFlags.Static));
-                if (disableInvited)
+                if (guestPatch)
                 {
+                    var pre = new HarmonyMethod(typeof(DynamicBoneThrottle).GetMethod(nameof(LateUpdatePrefix), BindingFlags.NonPublic | BindingFlags.Static));
+                    var preBreast = new HarmonyMethod(typeof(DynamicBoneThrottle).GetMethod(nameof(LateUpdatePrefixBreast), BindingFlags.NonPublic | BindingFlags.Static));
                     harmony.Patch(AccessTools.Method(typeof(DynamicBone), "LateUpdate"), prefix: pre);
                     harmony.Patch(AccessTools.Method(typeof(DynamicBone_Ver01), "LateUpdate"), prefix: pre);
-                    if (PatcherPlugin.DisableInvitedBreastDynamicBones.Value)
-                        harmony.Patch(AccessTools.Method(typeof(DynamicBone_Ver02), "LateUpdate"), prefix: pre);
+                    harmony.Patch(AccessTools.Method(typeof(DynamicBone_Ver02), "LateUpdate"), prefix: preBreast);
+                    PatcherPlugin.DisableInvitedDynamicBones.SettingChanged += (s, e) => LogGuestSetting("設定を変更しました");
+                    PatcherPlugin.DisableInvitedBreastDynamicBones.SettingChanged += (s, e) => LogGuestSetting("設定を変更しました");
                 }
 
                 if (limit)
@@ -91,9 +88,11 @@ namespace kPlugPatcher_InviteChrID
                         prefix: new HarmonyMethod(typeof(DynamicBoneThrottle).GetMethod(nameof(LimitPrefixVer01), BindingFlags.NonPublic | BindingFlags.Static)));
                 }
 
+                bool disableInvited = guestPatch && PatcherPlugin.DisableInvitedDynamicBones.Value;
                 PatcherPlugin.Logger.LogInfo(
                     $"{Tag} 適用しました: 招待キャラ・バディの揺れものの停止={(disableInvited ? "有効" : "無効")}" +
                     (disableInvited ? $"（胸 Ver02 も停止={PatcherPlugin.DisableInvitedBreastDynamicBones.Value}）" : "") +
+                    (guestPatch ? "（ゲーム中に切り替え可）" : "") +
                     $" / 1フレームの計算回数の上限={(limit ? PatcherPlugin.MaxDynamicBoneIterationsPerFrame.Value + "回" : "無効")}");
             }
             catch (Exception ex)
@@ -106,6 +105,7 @@ namespace kPlugPatcher_InviteChrID
 
         private static bool LateUpdatePrefix(Component __instance)
         {
+            if (!PatcherPlugin.DisableInvitedDynamicBones.Value) return true;
             try
             {
                 return !ShouldSkip(__instance);
@@ -114,6 +114,25 @@ namespace kPlugPatcher_InviteChrID
             {
                 return true;
             }
+        }
+
+        private static bool LateUpdatePrefixBreast(Component __instance)
+        {
+            if (!PatcherPlugin.DisableInvitedDynamicBones.Value || !PatcherPlugin.DisableInvitedBreastDynamicBones.Value) return true;
+            try
+            {
+                return !ShouldSkip(__instance);
+            }
+            catch
+            {
+                return true;
+            }
+        }
+
+        private static void LogGuestSetting(string why)
+        {
+            PatcherPlugin.Logger.LogInfo($"{Tag} {why}: 招待キャラ・バディの揺れものの停止={(PatcherPlugin.DisableInvitedDynamicBones.Value ? "有効" : "無効")}" +
+                                         $"（胸 Ver02 も停止={PatcherPlugin.DisableInvitedBreastDynamicBones.Value}）");
         }
 
         private static bool ShouldSkip(Component db)

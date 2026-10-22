@@ -33,8 +33,35 @@
   v1.6.0 からは男性一覧（バディ招待用）も対象で、`Dealer.InviteBuddy` の時点で読み直します。
   v1.7.0 からは、一覧用のカードを最初から全身画像・顔画像・パラメータだけ読みます（部分読み込み）。
   Hシーン入場時の招待メニュー作成は、約12秒・コミット +2GB から、約1秒・+410MB になりました（通常モードで確認）。
+  v1.13.0 からは、kPlugVR 3.599 以降の新しい招待メニュー（`MenuInvite`）も対象にします。新しい kPlugVR は VR のキャラ選択に入るたびに
+  全カードを完全に読み込み（女性250枚で約20秒・メモリ +11〜13GB。2回目で倍になり、メモリを使い切って落ちた）、そのまま保持します。
+  一覧には軽量版を置き、招待の瞬間（`InviteSomeone`）と見た目の読み直し（`TryToReloadDefAppearence`）の前に完全なカードを読み直します。
+  KK VR で、キャラ選択1回あたり約1.1〜1.6秒・+約1GB になりました。
+  v1.14.0 からは、部分読み込みでコイカツ！パーティーのカード（KK では IllusionFixes の Party Card Compatibility が入っているときだけ。サンシャインのカードも同じ）も読みます。
+  ゲーム本体が受け付けるカードの識別子と同じものだけを受け付けます。
+  v1.14.0 からは、VR の新しい招待メニューの顔画像を 252x352 まで縮め、CPU 側の写しを捨てます（`ShrinkVRMenuFaces`。v1.14.4 から既定で有効。GPU 側の見積 約300MB → 約115MB）。
 - **終了確認をキャンセルした後の不具合の修正 (v1.5.2)**: ウィンドウを閉じる操作で出る終了確認を「いいえ」で閉じると、以後、改名・読み直し・各種回避策が止まっていた（招待キャラが白くなる）問題を修正しました。
 - **複数人招待時のフレームレート改善 (v1.8.0〜、`DynamicBoneThrottle`)**: 複数人招待時の重さの主因は、ゲーム本体の揺れもの（DynamicBone）でした（5人でフレーム時間の約6割）。招待キャラとバディの揺れもの（髪・スカート・アクセサリ）の計算を止め、全キャラの揺れものの計算を1フレーム1回までに抑えます。通常モードで、5人時のフレーム時間が 123〜172ms（6〜8fps）から 28〜37ms（27〜36fps）になりました。招待キャラの揺れものは初期の姿勢で静止します（胸など体の揺れは残る）。オプションで個別に有効/無効切り替え可能。
+  v1.16.0 から、招待キャラの揺れものを止めるかどうか（`DisableInvitedDynamicBones` / `DisableInvitedBreastDynamicBones`）をゲーム中に切り替えられます。
+- **揺れものの当たり判定の軽量化 (v1.16.0〜、`EnableColliderCache`)**: 揺れもの1つの時間は「粒の数 × コライダーの数」でほぼ決まります
+  （粒とコライダーの1組あたり約0.6µs。233粒 × コライダー41 の髪で 1つ約6ms/f）。ゲーム本体は、粒ごとに全部のコライダーの位置と大きさを求め直しているためです。
+  揺れもの1つの計算の最初に、コライダーの位置と大きさを1回だけ求めておき、粒ごとにはその値を使います（**ゲーム本体へのパッチ**）。計算の式は元と同じです。
+  対象は DynamicBone / DynamicBone_Ver01 / DynamicBone_Ver02（胸）で、kPlug を使っていない場面（ADV など）の揺れものにも効きます。ゲーム中に切り替えられます。
+  確かめる用の `VerifyColliderCache` を有効にすると、元の処理の結果と毎回比べて、違った回数をログに出します。KK の通常モード・VR で、比べた結果の違いは 0 でした。
+  v1.16.1 から、粒ごとのコライダーのループ全体を1回の呼び出しにまとめます（`MergeColliderLoop`）。
+- **招待メニューの顔画像の縮小と破棄 (v1.17.0、`ShrinkInviteMenuFaces` / `ReleaseInviteMenuFaces`)**: kPlug の招待メニュー（通常モード）は、
+  カードごとの顔画像のテクスチャをカードの画像の大きさのまま（高解像度のカードは 756x1056）、CPU 側の写しも残したまま作ります
+  （約250枚で GPU 約300MB ＋ CPU 約300MB）。さらに Hシーンが終わっても破棄せず、タイトルに戻っても残っていました。
+  Hシーンの開始時に、ボタンの表示の大きさ（1080p で 189x270）に縮めて CPU 側の写しを捨て、Hシーンが終わったときに破棄します。
+  KK の通常モードで、3回の Hシーン（ダークネスを含む）とも毎回 253枚を縮めて（GPU の見積 299MB → 64MB、CPU 側の写し 約299MB を解放）、
+  Hシーンを出るときに破棄し、見た目にも問題が無いことを確認しました。
+- **VR のメニューの描く順番 (v1.14.2〜、`DrawMenusOnTop`)**: kPlugVR 3.599 以降の VR のメニューは深度を書かないため、描く順番が後になるキャラの部品（透過の服など）が、
+  メニューの奥にあってもメニューの上に描かれ、招待メニューのちらつきの原因にもなっていました。キャラの透過の部品を先に描くようにします（v1.14.3 から `Method = CharactersFirst`）。
+  KK VR で、服の重なりとちらつきが消えることを確認しました。v1.17.1 から、ちらつきの診断（`VRMenuFlickerDiagnostics`、既定は無効）を無効にしても働きます（前は診断が有効なときだけ働いていました）。
+- **挿入中に cf_j_kokan の大きさが壊れる問題の回避 (v1.15.0、`EnableKokanNaNGuard`)**: kPlug / kPlugVR の `KokanBehavior` は、男の腰の1フレームの移動量を時間で割って押しつぶしを足すため、
+  時間が0のときや移動量が大きいとき（VR で頭を大きく動かすなど）に、女の子の `cf_j_kokan` の大きさが 0・負・NaN になります。
+  kPlugVR が付けるコライダー（`Kokan_root/Kokan`）で Unity の警告「Infinity or NaN … for a Collider」が毎フレーム出て、ログが数MB 増えます（後背位の挿入中に多い）。
+  そのような計算を飛ばし、壊れた値を直します。KK VR で、この警告が出なくなったことをログで確認しました。
 - **Ahegao表示中の毎フレーム NRE の抑止 (v1.8.1、`EnableAIMainFaceColorGuard`)**: kPlug 設定の `EnableAhegao` を有効にしていると、`AI_Main.Ahegao()` が `Core.heroineCha.customMatFace`（顔のマテリアル）を null チェックせず `SetColor` するため、条件が揃っている間ずっと毎フレーム NRE が出ます（VR実機ログで 9,130 回）。例外で `Ahegao()` 末尾の状態記録と、呼び出し元 `LateUpdate()` の残りも飛んでいました。マテリアルが使えないときだけ頬の色の上書きを飛ばし、残りは実行するようにします。VRの実機で、抑止 4,666 回・NRE 0件・プレイ上の問題なしを確認済み（2026-09-23）。
 - **招待キャラへのキスが終わる瞬間の NRE の抑止 (v1.8.5、`EnableHCtrlKissGuard`)**: kPlugVR 3.56 の`HCtrl.ParseTouchables()` は、招待キャラへのキスの範囲から外れてキスの相手（`kissable_ai`）が null になったフレームでも、キス中の目印（`inAiKiss`）がまだ立っているため `kissable_ai.KissByPlayer()` を呼び、NRE になります（招待キャラへのキスが終わるたびに1回前後）。呼び出しの前に null チェックを差し込み、null のときはその呼び出しだけを飛ばします。原型でもそこで例外になり、メソッドの最後の文なので、失われる処理はありません。kPlug 3.63 の VR は作者が同じ null チェックを入れているため、IL を読んで適用しません。VRのみ対象。VR の実機で NRE 0件を確認済み（2026-09-26）。
 - **招待キャラ複数との同時キス (v1.9.0、`EnableMultiGuestKiss`)**: kPlugVR の `HCtrl.ParseTouchables()` は、キスの範囲に入っている招待キャラのうち最初の1人としかキスしません。ほかの招待キャラがキス中のときに限り、`StartDistance` / `StartAngle` の範囲に入った2人目以降のキャラにも kPlug のキス（`KissByPlayer()`）を始め、`KeepDistance` / `KeepAngle` の範囲を出たら終えます（1人だけのキスは kPlug 本来の範囲のまま）。2人目以降がいる間は kPlug が選んだキャラも同じ範囲で続けます（kPlug のキス終了を止める）。同時にキスした全員にキス回数・経験値・興奮が入り、キスの声が重なります。KK_CyuVR を入れていれば全員の口と舌が動きます。あわせて、キスの相手が同じフレームで別の招待キャラに直接替わると前の相手がキス状態のまま残る kPlug の問題の後始末（`EnableStuckGuestKissFix`）も入れました。VRのみ対象。VR の実機で、2人との同時キスが3回とも始まり、3回とも2人とも範囲を出たところで終わって、キス状態のまま残るキャラが無いことを確認済み（2026-09-26）。
@@ -106,9 +133,11 @@ KK版（`Release_KK`）と KKP版（`Release_KKP`）が両方ビルドされ、`
   - 部分読み込み（v1.7.0）は、`【KoiKatuCharaSP】` など識別子の違うカードでは使えず、従来どおり完全に読み込む（ログに理由を1回出す）。
 - **v1.6.0〜v1.8.0 の機能（男性一覧の軽量化、部分読み込み、各種診断、DynamicBoneThrottle）は、VRモード（kPlugVR 3.5.6）でも動作を確認済み**（2026年9月22日、約1時間27分のセッション）。招待メニューの作成 414ms・カード99枚すべて部分読み込み成功、揺れものは1フレーム1回に制限（4人招待で 20〜22fps を維持）、退出時に Material Editor のテクスチャ 356件を解放。ただし VR では 1眼あたり 2112×2304 を2枚描くため、フレーム時間の残り 25〜30ms は描画で、ここは本プラグインの対象外。
 - **診断機能（`KPlugPerfDiagnostics`）は、通常モードで kPlugVR の型に深く触れると Mono ごと落ちる**（v1.7.1 で発生、v1.7.2 で修正）。全アセンブリを走査する処理を足すときは、動作中のモードのアセンブリだけに絞ること。
-  - kPlug 3.599 以降の VR（`MenuInvite`）は未対応。3.63 の非VRは同じ構造のため効く見込み（未確認）。
+  - kPlug 3.599 以降の VR（`MenuInvite`）は v1.13.0 から対応（KK VR で確認）。3.63 の非VRは同じ構造のため効く見込み（未確認）。
   - カードファイルをゲーム中に移動・削除すると、招待時の読み直しに失敗し、既定の見た目で招待される。
 - メインヒロイン・セカンドヒロイン（セーブデータ由来）と同じ姓名を持つ別カードは、招待候補一覧にそもそも表示されない場合があります（kPlug側の在席判定が本プラグインの改名処理より手前の段階で行われるため）。
+- **v1.13.0〜v1.17.1 の確認の範囲**: v1.13.0〜v1.15.0 は KK の VR、v1.16.0（揺れものの当たり判定）は KK の通常モード・VR、v1.16.1 と v1.17.0 は KK の通常モードで確認しています。
+  v1.16.1 の VR、KKP、v1.17.1 の変更（ちらつきの診断を無効にしたときの描く順番）、v1.15.0 の後背位の見た目は確認していません。
 - **サードパーティ製チートツール`KK_CheatTools`（[ManlyMarco/IllusionCheatTools](https://github.com/ManlyMarco/IllusionCheatTools)）の「Unlock invalid H positions as well」設定が有効だと、Inviteアイコンが恒久的に無反応になります。** この設定はゲーム本体のHシーン体位絞り込み(`H.HSceneProc.CreateListAnimationFileName`)を無効化し、本来選ばれないはずのDLC専用体位が毎回Hシーン開始体位として選ばれてしまうため、kPlugの`isValidCtx`判定が`Normal`以外の値に固定されてしまいます。kPlug・本プラグインどちらの不具合でもなく、対処は当該チート設定を無効化することです。
 
 ## 7. 設定項目
@@ -132,6 +161,10 @@ KK版（`Release_KK`）と KKP版（`Release_KKP`）が両方ビルドされ、`
 | `LazyInviteCardList` | `EnableLazyInviteCardList` | bool | `true` | 招待メニューのカード一覧を遅延読み込みにする（kPlug 3.5.6 など旧API向け）。一覧には名前・性格と顔画像だけを持つ軽量版を置き、招待する瞬間に完全なカードを読み直す。1枚あたり約30MB・約100枚でHシーン入場ごとに約3GBのメモリ増加を抑える |
 | `LazyInviteCardList` | `IncludeMaleCards` | bool | `true` | 男性一覧（kPlug の EnBuddyInvite で出るバディ用カード）も軽量版にし、`Dealer.InviteBuddy` の時点で読み直す（v1.6.0）。無効にすると完全版のまま保持する |
 | `LazyInviteCardList` | `PartialLoad` | bool | `true` | 一覧用カードを、最初から全身画像・顔画像・パラメータだけ読む（v1.7.0）。拡張データ（Material Editor のテクスチャなど。1枚あたり数十MB）を読まないので、Hシーン入場時の読み込み時間と一時的なメモリ増加を減らす。読めなかったカードは完全に読む |
+| `LazyInviteCardList` | `EnableVRMenuInvite` | bool | `true` | kPlugVR 3.599 以降の新しい招待メニュー（`MenuInvite`）も軽量版にする（v1.13.0。VRモードのみ）。VR のキャラ選択に入るたびの全カードの読み込み（女性250枚で約20秒・+11〜13GB）を減らし、招待と見た目の読み直しの前に読み直す |
+| `LazyInviteCardList` | `ShrinkVRMenuFaces` | bool | `true` | 新しい招待メニュー（VR）の顔画像のテクスチャを 252x352 まで縮め、CPU 側の写しを捨てる（v1.14.0）。kPlugVR はカードの画像の大きさのまま作る（約250枚で GPU 側だけで約300MB）。次にキャラ選択に入ったときから反映。v1.14.4 から既定で有効 |
+| `LazyInviteCardList` | `ShrinkInviteMenuFaces` | bool | `true` | 招待メニュー（通常モードの InviteUI）の顔画像のテクスチャを、ボタンの表示の大きさ（1080p で 189x270）まで縮め、CPU 側の写しを捨てる（v1.17.0）。次の Hシーンから反映 |
+| `LazyInviteCardList` | `ReleaseInviteMenuFaces` | bool | `true` | Hシーンが終わって招待メニュー（通常モードの InviteUI）が破棄されるときに、顔画像のテクスチャも破棄する（v1.17.0） |
 | `InviteCard` | `ShowSameNameCardsInInviteList` | bool | `true` | 在席中のキャラ（メインヒロイン・セカンドヒロイン・招待済み）と同名のカードも招待リストに出す（v1.8.2）。対象はカード一覧だけで、ストーリー／デート相手のヒロインは従来どおり除外される |
 | `InviteCard` | `EnableVRInviteMenuUnblock` | bool | `true` | kPlug 3.599 以降の VR版で、同じカードを何度でも招待できるようにする（新しい招待UIは招待済みカードを一覧から外すため）。3.59 以前のVR・非VR版では何もしない |
 | `InviteCard` | `EnableInviteCardDiagnostics` | bool | `false` | 招待時に Prefix を通ったか、InviteCard に付いているパッチの一覧などをログ出力する診断（v1.5.1。読み取り専用） |
@@ -152,10 +185,20 @@ KK版（`Release_KK`）と KKP版（`Release_KKP`）が両方ビルドされ、`
 | `KPlugPerfDiagnostics` | `ProfileInviteCoroutines` | bool | `false` | `ProfileKPlugMethods` の一部。招待に関係する kPlug のコルーチンの1回ごとの処理時間も計測する |
 | `KPlugPerfDiagnostics` | `ProfileGameCharaUpdates` | bool | `true` | `ProfileKPlugMethods` の一部（v1.7.4）。ゲーム本体のキャラごとの更新処理（DynamicBone、FaceBlendShape、視線・首の制御、服・髪・アクセサリなど）にも計測を当てる。`ProfileKPlugMethods` が無効なら何もしない |
 | `KPlugPerfDiagnostics` | `TraceSwapSection` | bool | `false` | キャラ交代で止まる区間の処理の計測（v1.8.0。読み取り専用） |
-| `DynamicBoneThrottle` | `DisableInvitedDynamicBones` | bool | `true` | 招待キャラとバディの揺れもの（DynamicBone / Ver01）の計算を止める（v1.8.0）。複数人招待時のフレームレート低下の主因への対策。止めた揺れものは初期の姿勢で静止する。5人時のフレーム時間が 123〜172ms から 28〜37ms になった（通常モードで確認） |
-| `DynamicBoneThrottle` | `DisableInvitedBreastDynamicBones` | bool | `false` | 上に胸（DynamicBone_Ver02）も含める |
+| `DynamicBoneThrottle` | `DisableInvitedDynamicBones` | bool | `true` | 招待キャラとバディの揺れもの（DynamicBone / Ver01）の計算を止める（v1.8.0）。複数人招待時のフレームレート低下の主因への対策。止めた揺れものは初期の姿勢で静止する。5人時のフレーム時間が 123〜172ms から 28〜37ms になった（通常モードで確認）。v1.16.0 からゲーム中に切り替え可 |
+| `DynamicBoneThrottle` | `DisableInvitedBreastDynamicBones` | bool | `false` | 上に胸（DynamicBone_Ver02）も含める。v1.16.0 からゲーム中に切り替え可 |
 | `DynamicBoneThrottle` | `LimitDynamicBoneIterations` | bool | `true` | すべてのキャラの揺れもの（DynamicBone / Ver01）の1フレームの計算回数を `MaxIterationsPerFrame` までに抑える（v1.8.0）。元の処理はフレームが遅いと1フレームで最大3回計算するため、フレームレートが下がるほど重くなる。60fps 以上なら見た目は変わらない |
 | `DynamicBoneThrottle` | `MaxIterationsPerFrame` | int | `1` | `LimitDynamicBoneIterations` が有効なときの、1フレームあたりの揺れものの計算回数の上限（1〜2。3以上は元の処理と同じ） |
+| `DynamicBoneColliderCache` | `EnableColliderCache` | bool | `true` | 揺れもの（DynamicBone / Ver01 / Ver02）の当たり判定で、コライダーの位置と大きさを揺れもの1つにつき1回だけ求める（v1.16.0）。結果は元と同じ。**ゲーム本体(Assembly-CSharp)へのパッチ**。ゲーム中に切り替え可 |
+| `DynamicBoneColliderCache` | `MergeColliderLoop` | bool | `true` | `EnableColliderCache` が有効なとき、粒ごとのコライダーのループ全体を1回の呼び出しにまとめる（v1.16.1）。ゲーム中に切り替え可 |
+| `DynamicBoneColliderCache` | `VerifyColliderCache` | bool | `false` | 確かめる用。前計算の結果と元の処理の結果を毎回比べ、違った回数と最大の差を60秒ごとにログに出す（有効な間は元より重い）。ゲーム中に切り替え可 |
+| `KokanNaNGuard` | `EnableKokanNaNGuard` | bool | `true` | kPlug / kPlugVR の `KokanBehavior` が挿入中に `cf_j_kokan` の大きさを 0・負・NaN にする問題の回避策（v1.15.0）。移動量が時間0・NaN・1フレーム 0.15m 超のときは押しつぶしの計算を飛ばし、壊れた値は待機の値・0.05〜5 の範囲に直す。VR・通常モードの両方が対象 |
+| `VRMenuDrawOrder` | `DrawMenusOnTop` | bool | `true` | kPlugVR（3.599 以降）の VR のメニューを、キャラより後に描く（v1.14.2）。メニューは深度を書かないため、描く順番が後になるキャラの部品（透過の服など）が、奥にあってもメニューの上に描かれ、招待メニューのちらつきの原因にもなっていた。ゲーム中に切り替えられる |
+| `VRMenuDrawOrder` | `Method` | enum | `CharactersFirst` | 上の方法（v1.14.3）。`CharactersFirst`: キャラの透過の部品の sortingOrder を下げてキャラを先に描く（キャラ以外の順番は元のまま。キャラの半透明の部品とマップの透過の物の前後が変わることがある）。`MenusLast`: メニューを全部の最後に描く（v1.14.2 の方法。手前のレイがメニューに隠れることがある）。ゲーム中に切り替えられる |
+| `VRMenuDrawOrder` | `MenuSortingOrder` | int | `30000` | `MenusLast` のときのメニューの Canvas の sortingOrder |
+| `VRMenuDrawOrder` | `CharacterSortingOrder` | int | `-1` | `CharactersFirst` のときのキャラの透過の部品の sortingOrder（男のシルエットは対象外） |
+| `VRMenuFlickerDiagnostics` | `Enable` | bool | `false` | VR のメニューが招待のあとでちらつく件の診断（v1.14.0、読み取り専用）。タブの作り直しの重なり、文字のメッシュが空になっていないか、Canvas が描いていない部品、ステンシル（Mask）の状態をログに出す。メニューの表示中だけ毎フレーム数える。v1.17.1 から、無効でも `DrawMenusOnTop` は働く |
+| `VRMenuFlickerDiagnostics` | `SnapshotKey` | ショートカット | `Ctrl+F9` | 診断が有効なとき、ちらつきを見たときに押すと、メニューの状態を詳しくログに出す |
 | `HVoiceCachingFix` | `EnableHVoiceCachingShortBreathFix` | bool | `true` | HVoiceCaching 0.3 併用時に、kPlug のキャラ交代のたびに `HVoiceCtrl.Init` の中で出る例外を防ぐ（v1.8.3）。例外で交代処理の後半が飛び、キャラの声の性格が入れ替わる・外に出たキャラが交代中のまま残る問題の対策。HVoiceCaching が無ければ何もしない。**ゲーム本体(Assembly-CSharp)へのパッチ** |
 | `HVoiceCachingFix` | `EnableHVoiceCachingVoiceListFix` | bool | `true` | HVoiceCaching 0.3 併用時に、3P（女の子2人）の Hシーンがロード画面のまま進まなくなる問題の回避策（v1.9.1）。HVoiceCaching が1人目だけキャッシュから読んで本来の読み込みに戻したとき、声の辞書を `Init` 直後の状態に戻してから読ませる。HVoiceCaching が無ければ何もしない。**ゲーム本体(Assembly-CSharp)へのパッチ** |
 | `SetFaceDiagnostics` | `EnableSetFaceNreDiagnostics` | bool | `false` | kPlug `FaceCtrl.IE_SetFace` の NRE の原因を調べる診断（v1.10.2、読み取り専用）。例外が出たときだけ、キャラ・表情の種類・アヘ顔の状態と、コルーチンがたどる参照の null の有無を記録する。例外は抑止しない |
@@ -177,5 +220,5 @@ KK版（`Release_KK`）と KKP版（`Release_KKP`）が両方ビルドされ、`
 - 本プラグインは kPlug の動作を実行時に書き換えます。**kPlug のバージョンが変わると対象のメソッドが見つからず、機能の一部または全部が無効になることがあります**（その場合はログに理由が出ます）。
 
 ---
-作成日時: 2026年6月11日 / 最終更新: 2026年10月20日 (v1.11.2)
+作成日時: 2026年6月11日 / 最終更新: 2026年10月22日 (v1.17.1)
 作成者: Gemini CLI / Claude Opus 5

@@ -51,6 +51,24 @@ namespace kPlugPatcher_InviteChrID
     ///   **全身画像・顔画像・Parameter ブロックだけ**をファイルから読む（<see cref="TryPartialLoad"/>）。
     ///   kPlug が一覧のカードで使うのは parameter / pngData / facePngData だけであることを 3.56（非VR・VR）で確認済み。
     ///   部分読み込みに失敗したカードは、元の LoadCharaFile で完全に読み、上の方式で軽量版にする。
+    ///
+    /// 【kPlugVR 3.599 以降の新しい招待メニュー（MenuInvite、v1.13.0）】
+    ///   VR の新しい API では、キャラ選択の画面（<c>VRDealer.SetContext(Context.HSelect)</c>）に入るたびに
+    ///   <c>MenuInvite.InitFileList()</c> が <c>kFileParser.GetGirlCardList</c> / <c>GetMaleCardList</c> で全カードを完全に読み、
+    ///   静的なリスト <c>girlInfos</c> / <c>boyInfos</c>（<c>ChaInfo.file</c>）に次のキャラ選択まで保持する。
+    ///   女性250枚の環境で1回あたり 19〜27秒・Mono ヒープ +11〜13GB、2回目で 27GB になりメモリを使い切って落ちた。
+    ///   そこで <c>InitFileList()</c> の実行中も部分読み込みの範囲にし（VR のプロセスの kPlugVR だけ）、
+    ///   完全なカードが要る次の2か所の手前で、<c>ChaInfo.file</c> 自体を完全版に差し替える。
+    ///   - <c>MenuInvite.InviteSomeone(ChaInfo, …)</c>: 一覧のカードを <c>CopyAll</c> で写してから <c>InviteInVR</c> に渡すため、
+    ///     写す前に差し替える（<c>InviteInVR</c> に届くのは写した別のインスタンスなので、そこでは見分けられない）。
+    ///   - <c>MenuInvite.TryToReloadDefAppearence(cha, id)</c>: <c>idAndChaFile[id].file</c> を <c>CopyAll</c> する。
+    ///     メインのキャラ（id 0/1）は <c>InitAndTabAndInfoInH</c> で一覧の項目がそのまま登録されるので、ここでも差し替える。
+    ///   <c>InitAndTabAndInfoInH</c> はダークネス用に一覧の <c>parameter.personality</c> / <c>voiceRate</c> を書き換えるので、読み直したカードに写す。
+    ///
+    /// 【KK 以外のカード（v1.14.0）】
+    ///   部分読み込みが受け付ける識別子を、ゲーム本体（と Party Card Compatibility）の LoadFile と同じにした（<see cref="IsAcceptedCharaMark"/>）。
+    ///   それまでは「【KoiKatuChara】」だけで、パーティー・サンシャインのカード（KKP では KKP で作ったカードすべて）が毎回完全に読まれていた。
+    ///   版の新しい Parameter はゲーム本体と同じく読まずに既定値のままにする。
     /// </summary>
     internal static class LazyInviteCardList
     {
@@ -69,8 +87,19 @@ namespace kPlugPatcher_InviteChrID
             public byte Sex;
         }
 
-        /// <summary><c>InviteUI.Start()</c> の実行中だけ 1 以上になる。</summary>
+        /// <summary><c>InviteUI.Start()</c> / <c>MenuInvite.InitFileList()</c> の実行中だけ 1 以上になる。</summary>
         private static int _captureDepth;
+
+        /// <summary>今の範囲が <c>MenuInvite.InitFileList()</c>（kPlugVR の新しい API）なら true。読み直しの入口の判定に使う。</summary>
+        private static bool _captureIsMenuInvite;
+
+        /// <summary>MenuInvite の読み直しの入口（InviteSomeone / TryToReloadDefAppearence）が当たっているか。</summary>
+        private static bool _menuInviteHooked;
+
+        // MenuInvite（kPlugVR）の型の情報。リフレクションで扱う（kPlugVR は参照しない。csproj の注意を参照）
+        private static FieldInfo _chaInfoFileField;
+        private static FieldInfo _idAndChaFileField;
+        private static int _menuInviteRestored;
 
         /// <summary>LoadCharaFile 直後から一覧に追加されるまでの間だけ持つ「完全版 → 読み込み元」。</summary>
         private static readonly Dictionary<ChaFileControl, CardSource> _pending =
@@ -97,6 +126,9 @@ namespace kPlugPatcher_InviteChrID
         private static int _keptFullThisScene;
         private static int _partialLoadedThisScene;
         private static int _partialFailedThisScene;
+        private static int _parameterSkippedThisScene;
+        private static readonly Dictionary<string, int> _otherMarkCounts = new Dictionary<string, int>();
+        private static readonly Dictionary<string, List<string>> _failedByReason = new Dictionary<string, List<string>>();
 
         /// <summary>部分読み込みしたカード（最初から軽量版）→ 読み込み元。一覧に追加されるまでの間だけ持つ。</summary>
         private static readonly Dictionary<ChaFileControl, CardSource> _preLight =
@@ -126,6 +158,77 @@ namespace kPlugPatcher_InviteChrID
 
                 TryPatchGetCardList(harmony, types);
                 TryPatchInviteUIStart(harmony, types);
+
+                // MenuInvite は VR の UI の型を土台にしているので、通常モードでは触らない
+                // （読み込めない型の中身を調べると Mono ごと落ちる）
+                if (IsVRProcess && assembly.GetName().Name.IndexOf("kPlugVR", StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    TryPatchMenuInvite(harmony, types);
+                }
+            }
+        }
+
+        private static bool IsVRProcess
+        {
+            get { return BepInEx.Paths.ProcessName.EndsWith("VR", StringComparison.OrdinalIgnoreCase); }
+        }
+
+        private static void TryPatchMenuInvite(Harmony harmony, Type[] types)
+        {
+            var type = types.FirstOrDefault(t => t != null && t.FullName != null && t.FullName.EndsWith(".Menu.MenuInvite"));
+            if (type == null) return;
+
+            string key = type.FullName + "|MenuInvite";
+            if (_appliedKeys.Contains(key)) return;
+            _appliedKeys.Add(key);
+
+            try
+            {
+                if (!PatcherPlugin.LazyInviteVRMenuInvite.Value)
+                {
+                    PatcherPlugin.Logger.LogInfo($"{Tag} 設定 EnableVRMenuInvite が無効のため、{type.FullName} の一覧は完全版のまま読み込みます。");
+                    return;
+                }
+
+                var chaInfoType = type.GetNestedType("ChaInfo", BindingFlags.Public | BindingFlags.NonPublic);
+                _chaInfoFileField = chaInfoType != null ? chaInfoType.GetField("file", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance) : null;
+                _idAndChaFileField = AccessTools.Field(type, "idAndChaFile");
+                var initFileList = AccessTools.DeclaredMethod(type, "InitFileList", Type.EmptyTypes);
+                var inviteSomeone = AccessTools.DeclaredMethod(type, "InviteSomeone");
+                var reload = AccessTools.DeclaredMethod(type, "TryToReloadDefAppearence");
+
+                if (_chaInfoFileField == null || _chaInfoFileField.FieldType != typeof(ChaFileControl)
+                    || _idAndChaFileField == null || initFileList == null || inviteSomeone == null || reload == null)
+                {
+                    PatcherPlugin.Logger.LogWarning(
+                        $"{Tag} {type.FullName} の構造が想定と違うため、新しい招待メニューの遅延読み込みは適用しません（一覧は完全版のまま）: " +
+                        $"ChaInfo.file={_chaInfoFileField != null} / idAndChaFile={_idAndChaFileField != null} / InitFileList={initFileList != null} / " +
+                        $"InviteSomeone={inviteSomeone != null} / TryToReloadDefAppearence={reload != null}");
+                    return;
+                }
+                if (inviteSomeone.GetParameters().Length == 0 || inviteSomeone.GetParameters()[0].ParameterType != chaInfoType
+                    || reload.GetParameters().Length < 2 || reload.GetParameters()[1].ParameterType != typeof(int))
+                {
+                    PatcherPlugin.Logger.LogWarning($"{Tag} {type.FullName}.InviteSomeone / TryToReloadDefAppearence の引数が想定と違うため、新しい招待メニューの遅延読み込みは適用しません。");
+                    return;
+                }
+
+                MenuInviteFaceShrink.Init(type, chaInfoType);
+
+                // 読み直しの入口を先に当て、両方当たってから範囲指定を当てる（入口が無いまま軽量版にすると、見た目の無いキャラが生成される）
+                harmony.Patch(inviteSomeone, prefix: Method(nameof(InviteSomeonePrefix)));
+                harmony.Patch(reload, prefix: Method(nameof(ReloadDefAppearencePrefix)));
+                _menuInviteHooked = true;
+                harmony.Patch(initFileList,
+                    prefix: Method(nameof(MenuInviteInitPrefix)),
+                    postfix: Method(nameof(MenuInviteInitPostfix)),
+                    finalizer: Method(nameof(InviteUIStartFinalizer)));
+                PatcherPlugin.Logger.LogInfo($"{Tag} {type.FullName} の一覧（InitFileList）に遅延読み込みを、InviteSomeone / TryToReloadDefAppearence に読み直しを適用しました（frame={UnityEngine.Time.frameCount}）。");
+            }
+            catch (Exception ex)
+            {
+                _menuInviteHooked = false;
+                LogApplyFailureOnce(key, $"{type.FullName}（新しい招待メニュー）", ex);
             }
         }
 
@@ -220,6 +323,7 @@ namespace kPlugPatcher_InviteChrID
                     finalizer: Method(nameof(InviteUIStartFinalizer)));
                 _appliedKeys.Add(key);
                 PatcherPlugin.Logger.LogInfo($"{Tag} {type.FullName}.Start() に遅延読み込みの範囲指定を適用しました（frame={UnityEngine.Time.frameCount}）。");
+                InviteUIFaceShrink.TryApply(harmony, type);
             }
             catch (Exception ex)
             {
@@ -233,7 +337,12 @@ namespace kPlugPatcher_InviteChrID
         {
             _captureDepth++;
             if (_captureDepth != 1) return;
+            _captureIsMenuInvite = false;
+            ResetSceneState();
+        }
 
+        private static void ResetSceneState()
+        {
             // 前の Hシーンの軽量版は、InviteUI ごと捨てられているので対応表も作り直す
             _lightToSource.Clear();
             _pending.Clear();
@@ -243,11 +352,15 @@ namespace kPlugPatcher_InviteChrID
             _keptFullThisScene = 0;
             _partialLoadedThisScene = 0;
             _partialFailedThisScene = 0;
+            _parameterSkippedThisScene = 0;
+            _otherMarkCounts.Clear();
+            _failedByReason.Clear();
         }
 
         /// <summary>Start() が最後まで走った場合のみ呼ばれる。顔画像を作り終えたので画像データを外す。</summary>
-        private static void InviteUIStartPostfix()
+        private static void InviteUIStartPostfix(object __instance)
         {
+            InviteUIFaceShrink.Apply(__instance);
             try
             {
                 foreach (var light in _lightToSource.Keys)
@@ -261,7 +374,8 @@ namespace kPlugPatcher_InviteChrID
                     PatcherPlugin.Logger.LogInfo(
                         $"{Tag} 招待メニューのカード {_lightenedThisScene} 枚を軽量版にしました" +
                         $"（うち男性一覧 {_lightenedMaleThisScene} 枚。完全版のまま: {_keptFullThisScene} 枚。" +
-                        $"部分読み込み {_partialLoadedThisScene} 枚 / 部分読み込みに失敗して完全に読んだもの {_partialFailedThisScene} 枚）。招待する瞬間に読み直します。");
+                        $"部分読み込み {_partialLoadedThisScene} 枚 / 部分読み込みに失敗して完全に読んだもの {_partialFailedThisScene} 枚）。招待する瞬間に読み直します。" +
+                        DescribeLoadBreakdown());
                 }
 
                 InviteCardDiagnostics.LogPatchState("招待メニュー作成後");
@@ -280,8 +394,108 @@ namespace kPlugPatcher_InviteChrID
                 // 一覧に追加されなかった完全版を抱え込まないよう必ず空にする
                 _pending.Clear();
                 _preLight.Clear();
+                _captureIsMenuInvite = false;
             }
             return __exception;
+        }
+
+        // ===================== MenuInvite（kPlugVR の新しい API）=====================
+
+        private static void MenuInviteInitPrefix()
+        {
+            _captureDepth++;
+            if (_captureDepth != 1) return;
+            // 前のキャラ選択の一覧（girlInfos）は、この後 kPlugVR が新しい一覧に置き換える。対応表も作り直す
+            _captureIsMenuInvite = true;
+            ResetSceneState();
+            _menuInviteRestored = 0;
+        }
+
+        /// <summary>InitFileList() が最後まで走った場合のみ呼ばれる。顔画像のテクスチャを作り終えたので全身画像のデータを外す。</summary>
+        private static void MenuInviteInitPostfix()
+        {
+            try
+            {
+                // 顔画像データ（facePngData）は InviteSomeone が招待したカードに写すので残す。全身画像（pngData）は以後使われない
+                foreach (var light in _lightToSource.Keys)
+                {
+                    light.pngData = null;
+                }
+
+                PatcherPlugin.Logger.LogInfo(
+                    $"{Tag} 新しい招待メニュー（MenuInvite）のカード {_lightenedThisScene} 枚を軽量版にしました" +
+                    $"（完全版のまま: {_keptFullThisScene} 枚。部分読み込み {_partialLoadedThisScene} 枚 / 部分読み込みに失敗して完全に読んだもの {_partialFailedThisScene} 枚）。" +
+                    $"招待する瞬間と見た目の読み直しの前に、完全なカードを読み直します。" + DescribeLoadBreakdown());
+
+                MenuInviteFaceShrink.Apply();
+            }
+            catch (Exception ex)
+            {
+                SafeLogWarning("MenuInvite.InitFileList(後処理)", ex);
+            }
+        }
+
+        /// <summary>MenuInvite.InviteSomeone(ChaInfo chaInfo, …) の Prefix。CopyAll で写される前に、一覧の項目を完全版に差し替える。</summary>
+        private static void InviteSomeonePrefix(object __0)
+        {
+            if (PatcherPlugin.IsQuitting || __0 == null) return;
+            UpgradeChaInfo(__0, "招待");
+        }
+
+        /// <summary>MenuInvite.TryToReloadDefAppearence(ChaControl cha, int id) の Prefix。idAndChaFile[id] の項目を完全版に差し替える。</summary>
+        private static void ReloadDefAppearencePrefix(int __1)
+        {
+            if (PatcherPlugin.IsQuitting) return;
+            try
+            {
+                var dict = _idAndChaFileField.GetValue(null) as System.Collections.IDictionary;
+                if (dict == null || !dict.Contains(__1)) return;
+                UpgradeChaInfo(dict[__1], $"見た目の読み直し（id={__1}）");
+            }
+            catch (Exception ex)
+            {
+                SafeLogWarning("見た目の読み直しの前の差し替え", ex);
+            }
+        }
+
+        /// <summary>
+        /// MenuInvite の一覧の項目（ChaInfo）の file が軽量版なら、控えたパスから完全なカードを読み直し、file 自体を差し替える。
+        /// 一度差し替えた項目は完全版のまま残る（招待したキャラとメインのキャラの分だけ。元の kPlugVR はすべて完全版を持っていた）。
+        /// </summary>
+        private static void UpgradeChaInfo(object chaInfo, string why)
+        {
+            try
+            {
+                var light = _chaInfoFileField.GetValue(chaInfo) as ChaFileControl;
+                CardSource source;
+                if (light == null || !_lightToSource.TryGetValue(light, out source)) return;
+
+                var begin = KPlugMemoryDiagnostics.Take();
+                var full = new ChaFileControl();
+                bool ok;
+                try { ok = full.LoadCharaFile(source.Path, source.Sex); }
+                catch (Exception ex) { ok = false; SafeLogWarning($"カードの読み直し ({source.Path})", ex); }
+
+                if (!ok)
+                {
+                    PatcherPlugin.Logger.LogError(
+                        $"{Tag} {why}のためのカード読み直しに失敗しました。軽量版のまま使われるため、見た目が既定の状態になる可能性があります: {source.Path}");
+                    return;
+                }
+
+                // ダークネス用の性格・声の読み替え（InitAndTabAndInfoInH）を含む parameter を写す
+                full.CopyParameter(light.parameter);
+                _chaInfoFileField.SetValue(chaInfo, full);
+                _lightToSource.Remove(light);
+                _menuInviteRestored++;
+
+                PatcherPlugin.Logger.LogInfo($"{Tag} {why}のためカードを読み直しました（このキャラ選択で {_menuInviteRestored} 枚目）: {full.parameter.fullname} ({source.Path})" +
+                    $" / 所要 {begin.watch.ElapsedMilliseconds}ms / {KPlugMemoryDiagnostics.Diff(begin, KPlugMemoryDiagnostics.Take())}");
+            }
+            catch (Exception ex)
+            {
+                SafeLogWarning($"{why}の前の差し替え", ex);
+            }
         }
 
         // ===================== 読み込みの記録と差し替え =====================
@@ -344,6 +558,8 @@ namespace kPlugPatcher_InviteChrID
         /// <summary>この性別の一覧を軽量版にしてよいか（招待時に読み直す入口にパッチが当たっているか）。</summary>
         private static bool CanRestore(byte sex)
         {
+            // 新しい招待メニューは、男女とも InviteSomeone の手前で読み直す（kPlugVR は男性一覧も sex=1 で読む）
+            if (_captureIsMenuInvite) return _menuInviteHooked;
             return sex == 0
                 ? _inviteBuddyHooked && PatcherPlugin.LazyInviteIncludeMaleCards.Value
                 : _inviteCardHooked;
@@ -369,9 +585,12 @@ namespace kPlugPatcher_InviteChrID
                 }
 
                 _partialFailedThisScene++;
+                List<string> examples;
+                if (!_failedByReason.TryGetValue(reason, out examples)) _failedByReason[reason] = examples = new List<string>();
+                examples.Add(Path.GetFileName(filename));
                 if (_failureLoggedKeys.Add("PartialLoad|" + reason))
                 {
-                    PatcherPlugin.Logger.LogInfo($"{Tag} 部分読み込みできなかったため完全に読み込みます（同じ理由は以後省略）: {reason} ({filename})");
+                    PatcherPlugin.Logger.LogInfo($"{Tag} 部分読み込みできなかったため完全に読み込みます（同じ理由は以後省略。一覧を作り終えたときに理由ごとの枚数を出します）: {reason} ({filename})");
                 }
             }
 
@@ -406,7 +625,8 @@ namespace kPlugPatcher_InviteChrID
 
                     int productNo = br.ReadInt32();
                     if (productNo > 100) { reason = "productNo が範囲外"; return false; }
-                    if (br.ReadString() != "【KoiKatuChara】") { reason = "キャラカードの識別子が違う"; return false; }
+                    string mark = br.ReadString();
+                    if (!IsAcceptedCharaMark(mark)) { reason = "キャラカードの識別子が違う"; return false; }
 
                     var version = new Version(br.ReadString());
                     if (ChaFileDefine.ChaFileVersion.CompareTo(version) < 0) { reason = "カードのバージョンが新しすぎる"; return false; }
@@ -422,10 +642,18 @@ namespace kPlugPatcher_InviteChrID
 
                     var info = header.SearchInfo(ChaFileParameter.BlockName);
                     if (info == null) { reason = "Parameter ブロックが無い"; return false; }
-                    if (ChaFileDefine.ChaFileParameterVersion.CompareTo(new Version(info.version)) < 0) { reason = "Parameter のバージョンが新しすぎる"; return false; }
-
-                    br.BaseStream.Seek(dataStart + info.pos, SeekOrigin.Begin);
-                    c.SetParameterBytes(br.ReadBytes((int)info.size));
+                    if (ChaFileDefine.ChaFileParameterVersion.CompareTo(new Version(info.version)) < 0)
+                    {
+                        // ゲーム本体の LoadFile も、版の新しい Parameter は読まずに既定値のまま成功として返す（サンシャインのカードの 0.0.6 など）。
+                        // 完全に読んでも同じ結果になるので、同じく既定値のまま軽量版にする
+                        _parameterSkippedThisScene++;
+                    }
+                    else
+                    {
+                        br.BaseStream.Seek(dataStart + info.pos, SeekOrigin.Begin);
+                        c.SetParameterBytes(br.ReadBytes((int)info.size));
+                    }
+                    if (mark != "【KoiKatuChara】") CountOtherMark(mark);
                 }
 
                 // 元の LoadCharaFile(BinaryReader) と同じく、範囲外の値を直す（ここでは Parameter の分だけ）
@@ -437,6 +665,56 @@ namespace kPlugPatcher_InviteChrID
                 reason = ex.GetType().Name + ": " + ex.Message;
                 return false;
             }
+        }
+
+        /// <summary>
+        /// 部分読み込みで受け付けるキャラカードの識別子。ゲーム本体（と、それを広げるプラグイン）の LoadFile と同じにする。
+        /// 受け付けない識別子は完全な読み込みに回すので、ここで狭く判定しても読めなくなるカードは無い（遅くなるだけ）。
+        ///   - KK 本体は「【KoiKatuChara】」だけ。IllusionFixes の Party Card Compatibility（KK_Fix_PartyCardCompatibility）が入っていると、
+        ///     「【KoiKatuChara」で始まる識別子をすべて受け付ける（パーティーの「【KoiKatuCharaS】」「【KoiKatuCharaSP】」、
+        ///     サンシャインの「【KoiKatuCharaSun】」も。同プラグイン 22.1 の CustomCardTokenCompare）。
+        ///   - KKP 本体は ChaFileDefine.CharaFileMarkCheck（【KoiKatuChara】【KoiKatuCharaS】【KoiKatuCharaSP】）。
+        /// 確認した環境では、これらの識別子のカード8枚が毎回完全に読まれていた。
+        /// </summary>
+        private static bool IsAcceptedCharaMark(string mark)
+        {
+            if (mark == null) return false;
+            if (mark == "【KoiKatuChara】") return true;
+#if KKP
+            return Array.IndexOf(ChaFileDefine.CharaFileMarkCheck, mark) >= 0;
+#else
+            if (_partyCardCompat == null)
+            {
+                _partyCardCompat = BepInEx.Bootstrap.Chainloader.PluginInfos.ContainsKey("KK_Fix_PartyCardCompatibility");
+                PatcherPlugin.Logger.LogInfo($"{Tag} Party Card Compatibility は{(_partyCardCompat.Value ? "あります。パーティー・サンシャインのカードも部分読み込みします" : "ありません。KK のカードだけを部分読み込みします")}。");
+            }
+            return _partyCardCompat.Value && mark.StartsWith("【KoiKatuChara", StringComparison.OrdinalIgnoreCase);
+#endif
+        }
+
+#if !KKP
+        private static bool? _partyCardCompat;
+#endif
+
+        private static void CountOtherMark(string mark)
+        {
+            int n;
+            _otherMarkCounts.TryGetValue(mark, out n);
+            _otherMarkCounts[mark] = n + 1;
+        }
+
+        /// <summary>一覧を作り終えたときに出す、識別子・失敗の理由ごとの内訳（無ければ空文字）。</summary>
+        private static string DescribeLoadBreakdown()
+        {
+            var parts = new List<string>();
+            if (_otherMarkCounts.Count > 0)
+                parts.Add("KK 以外のカードの部分読み込み: " + string.Join(", ", _otherMarkCounts.Select(kv => $"{kv.Key} {kv.Value}枚").ToArray()));
+            if (_parameterSkippedThisScene > 0)
+                parts.Add($"Parameter の版が新しいため既定値のまま（ゲーム本体の読み込みと同じ）: {_parameterSkippedThisScene}枚");
+            if (_failedByReason.Count > 0)
+                parts.Add("完全に読んだもの: " + string.Join(", ", _failedByReason.Select(kv =>
+                    $"{kv.Key} {kv.Value.Count}枚（{string.Join(" / ", kv.Value.Take(3).ToArray())}{(kv.Value.Count > 3 ? " ほか" : "")}）").ToArray()));
+            return parts.Count == 0 ? "" : " / " + string.Join(" / ", parts.ToArray());
         }
 
         private static ChaFileControl MakeLight(ChaFileControl full)

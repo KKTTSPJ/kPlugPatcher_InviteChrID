@@ -52,7 +52,7 @@ namespace kPlugPatcher_InviteChrID
         private const string LegacyGuid = "com.your.kkp.kplugpatcher";
         public const string PluginName = "KKP kPlug Patcher Invite ChrID";
 #endif
-        public const string Version = "1.11.2";
+        public const string Version = "1.17.1";
 
         internal static new ManualLogSource Logger;
         internal static bool IsQuitting = false;
@@ -88,6 +88,8 @@ namespace kPlugPatcher_InviteChrID
         // EnableExtraAnimIkTargetGuard は kPlug 側、EnableMotionIKNullTargetGuard はゲーム本体(Assembly-CSharp)側の安全網。
         internal static ConfigEntry<bool> EnableExtraAnimIkTargetGuard;
         internal static ConfigEntry<bool> EnableMotionIKNullTargetGuard;
+        // kPlug / kPlugVR の KokanBehavior が挿入中に cf_j_kokan の大きさを壊す（Kokan_root/Kokan の NaN の警告）問題の回避策（v1.15.0）
+        internal static ConfigEntry<bool> EnableKokanNaNGuard;
 
         // kPlugVR 本体の null チェック漏れに対する個別ガード（KPlugVRNullGuards）の設定
         internal static ConfigEntry<bool> EnableVRRootMenuVisibilityGuard;
@@ -104,6 +106,10 @@ namespace kPlugPatcher_InviteChrID
         internal static ConfigEntry<bool> EnableLazyInviteCardList;
         internal static ConfigEntry<bool> LazyInviteIncludeMaleCards;
         internal static ConfigEntry<bool> LazyInvitePartialLoad;
+        internal static ConfigEntry<bool> LazyInviteVRMenuInvite;
+        internal static ConfigEntry<bool> ShrinkVRMenuFaces;
+        internal static ConfigEntry<bool> ShrinkInviteMenuFaces;
+        internal static ConfigEntry<bool> ReleaseInviteMenuFaces;
 
         // 在席中のキャラと同名のカードを招待リストに出す回避策（InviteListSameNameUnblock）の設定
         internal static ConfigEntry<bool> ShowSameNameCardsInInviteList;
@@ -133,6 +139,11 @@ namespace kPlugPatcher_InviteChrID
         internal static ConfigEntry<bool> DisableInvitedBreastDynamicBones;
         internal static ConfigEntry<bool> LimitDynamicBoneIterations;
         internal static ConfigEntry<int> MaxDynamicBoneIterationsPerFrame;
+
+        // 揺れものの当たり判定を、結果を変えずに軽くする（DynamicBoneColliderCache、v1.16.0）の設定
+        internal static ConfigEntry<bool> EnableDynamicBoneColliderCache;
+        internal static ConfigEntry<bool> VerifyDynamicBoneColliderCache;
+        internal static ConfigEntry<bool> MergeDynamicBoneColliderLoop;
 
         // HVoiceCaching が kPlug のキャラ交代のたびに例外を投げ、交代処理の後半が飛ぶ問題の回避策（HVoiceCachingShortBreathFix）の設定
         internal static ConfigEntry<bool> EnableHVoiceCachingShortBreathFix;
@@ -241,6 +252,9 @@ namespace kPlugPatcher_InviteChrID
             EnableMotionIKNullTargetGuard = Config.Bind(
                 "MotionIKNullTargetGuard", "EnableMotionIKNullTargetGuard", true,
                 "ゲーム本体の MotionIK.LinkIK が、手足の IK の目標（effector.target）や曲げの目標（bend.bendGoal）が null のときに NullReferenceException を起こす問題の安全網（v1.10.6）。この例外はアニメーションの切り替え（HActionBase.SetPlay）の途中で起きるため、HSonyu.Proc の絶頂の終了処理（finish の解除・ゲージのリセット）が飛び、絶頂が繰り返されます。目標が null の手足だけを飛ばし、残りの手足とアニメーションの切り替えの後ろの処理を実行させます。原因が kPlug 以外でも効きます。どのキャラ・どの手足かを最初の1回と50回ごとにログ出力します。※本項目は kPlug ではなくゲーム本体(Assembly-CSharp)へのパッチです。変更はゲーム再起動後に反映されます。");
+            EnableKokanNaNGuard = Config.Bind(
+                "KokanNaNGuard", "EnableKokanNaNGuard", true,
+                "kPlug / kPlugVR の KokanBehavior が、挿入中に女の子の cf_j_kokan の大きさを 0・負・NaN にしてしまう問題の回避策（v1.15.0）。kPlug は男の腰の1フレームの移動量を時間で割って押しつぶしを足すため、時間が0のときや、VR で頭を大きく動かしたときなどに値が壊れ、kPlugVR が付けるコライダー（Kokan_root/Kokan）で Unity の警告「Infinity or NaN … for a Collider」が毎フレーム出ます（ログの肥大化。後背位の挿入中に多い）。有効な場合は、そのような計算を飛ばし、壊れた値を待機の値・範囲内の値に直します。最初の1回は値を詳しく、その後は30秒ごとに回数をログ出力します。変更はゲーム再起動後に反映されます。");
             EnableLazyInviteCardList = Config.Bind(
                 "LazyInviteCardList", "EnableLazyInviteCardList", true,
                 "kPlug の招待メニューが全キャラカードを完全な形で読み込み、Hシーンの間ずっと保持する問題（1枚あたり約30MB、約100枚でHシーン入場ごとに約3GB）の回避策。一覧には名前・性格と顔画像だけを持つ軽量版を置き、完全なカードは招待する瞬間に読み直します。読み込み中も1枚ずつ軽量版へ置き換えるため、読み込み時のメモリのピークも下がります。kPlug 3.5.6 など旧API（InviteUI があるもの）向け。男性一覧の扱いは IncludeMaleCards で切り替えます。変更はゲーム再起動後に反映されます。");
@@ -250,6 +264,19 @@ namespace kPlugPatcher_InviteChrID
             LazyInvitePartialLoad = Config.Bind(
                 "LazyInviteCardList", "PartialLoad", true,
                 "招待メニューの一覧用カードを、完全に読んでから軽量版にするのではなく、最初から全身画像・顔画像・パラメータだけを読むかどうか（v1.7.0）。拡張データ（Material Editor のテクスチャなど）の展開と他プラグインの読み込み処理を省くため、Hシーン入場時の読み込み時間と一時的なメモリ増加（約12秒・約2GB）を減らします。部分読み込みに失敗したカードは完全に読みます。無効にすると v1.6.x の動作に戻ります。EnableLazyInviteCardList が有効なときだけ意味を持ちます。");
+            LazyInviteVRMenuInvite = Config.Bind(
+                "LazyInviteCardList", "EnableVRMenuInvite", true,
+                "kPlugVR 3.599 以降の新しい招待メニュー（MenuInvite）も軽量版にするかどうか（v1.13.0。VRモードのみ）。新しい API の kPlugVR は、VR のキャラ選択の画面に入るたびに全キャラカードを完全な形で読み込み、次のキャラ選択まで保持します（女性250枚で1回あたり約20秒・メモリ +11〜13GB。2回目で倍になり、メモリを使い切って落ちることがあります）。有効な場合は名前・性格・顔画像だけを読み、招待する瞬間と見た目の読み直しの前に完全なカードを読み直します。EnableLazyInviteCardList が有効なときだけ意味を持ちます。変更はゲーム再起動後に反映されます。");
+            ShrinkVRMenuFaces = Config.Bind(
+                "LazyInviteCardList", "ShrinkVRMenuFaces", true,
+                "新しい招待メニュー（MenuInvite、VRモード）の顔画像のテクスチャを、ボタンの表示に足りる大きさ（252x352 まで）に作り直すかどうか（v1.14.0）。kPlugVR はカードの画像の大きさのまま（高解像度のカードは 756x1056）、CPU 側の写しも残したままテクスチャを作るため、約250枚で GPU 側だけで約300MB を使います。有効にすると、大きいものは縮め、全部の CPU 側の写しを捨てます。EnableVRMenuInvite が有効なときだけ働き、次にキャラ選択に入ったときから反映されます。v1.14.4 から既定で有効（VR で見た目に問題が無いことを確認）。");
+            ShrinkInviteMenuFaces = Config.Bind(
+                "LazyInviteCardList", "ShrinkInviteMenuFaces", true,
+                "kPlug の招待メニュー（通常モードの InviteUI）の顔画像のテクスチャを、ボタンの表示の大きさ（1080p で 189x270）に作り直すかどうか（v1.17.0）。kPlug はカードの画像の大きさのまま（高解像度のカードは 756x1056）、CPU 側の写しも残したままテクスチャを作るため、約250枚で GPU 約300MB ＋ CPU 約300MB を使います。有効にすると、大きいものは縮め、全部の CPU 側の写しを捨てます。EnableLazyInviteCardList が有効なときだけ働き、次の Hシーンから反映されます。");
+            ReleaseInviteMenuFaces = Config.Bind(
+                "LazyInviteCardList", "ReleaseInviteMenuFaces", true,
+                "Hシーンが終わって kPlug の招待メニュー（通常モードの InviteUI）が破棄されるときに、顔画像のテクスチャも破棄するかどうか（v1.17.0）。kPlug は破棄しないうえ、古い InviteUI への参照が残るため、顔画像が Hシーンを出た後もタイトルに戻っても残ります。EnableLazyInviteCardList が有効なときだけ働きます。");
+            VRMenuFlickerDiagnostics.BindConfig(Config);
             ShowSameNameCardsInInviteList = Config.Bind(
                 "InviteCard", "ShowSameNameCardsInInviteList", true,
                 "在席中のキャラクター（メインヒロイン・セカンドヒロイン・招待済み）と同じ名前のカードも、招待リストに表示するかどうか（v1.8.2）。kPlug は InviteUI.IsAlreadyInHarem で名前が一致するカードを一覧から外しますが、本プラグインは招待の瞬間にカードを複製して改名するため、同名でも別個体として扱えます。対象はカード一覧（女性・男性）だけで、ストーリー／デート相手のヒロイン（セーブデータ由来で改名しない）は従来どおり除外されます。無効にすると kPlug 本来の動作に戻ります。変更はゲーム再起動後に反映されます。");
@@ -316,16 +343,29 @@ namespace kPlugPatcher_InviteChrID
                 "キャラ交代で約11秒止まる件の調査（v1.8.0）。交代処理（AI_Public.IE_SwapGirls）の遅い区間で呼ばれる kPlug の処理（statManager の各種、GetStats、ReplaceFaceImage、AdaptAnim など）と、ゲーム本体の HVoiceCtrl.Init に計測を当て、1回 30ms 以上かかった呼び出しを1件ずつログ出力します（読み取り専用）。");
             DisableInvitedDynamicBones = Config.Bind(
                 "DynamicBoneThrottle", "DisableInvitedDynamicBones", true,
-                "kPlug が招待したキャラとバディの揺れもの（DynamicBone / DynamicBone_Ver01。髪・スカート・アクセサリなど）の計算を止める（v1.8.0）。複数人招待時のフレームレート低下の主因（5人で約6割）への対策。止めた揺れものは初期の姿勢で静止します。主人公・メインヒロインは対象外。変更はゲーム再起動後に反映されます。");
+                "kPlug が招待したキャラとバディの揺れもの（DynamicBone / DynamicBone_Ver01。髪・スカート・アクセサリなど）の計算を止める（v1.8.0）。複数人招待時のフレームレート低下の主因（5人で約6割）への対策。止めた揺れものは初期の姿勢で静止します。主人公・メインヒロインは対象外。v1.16.0 からゲーム中の変更もすぐ反映されます（kPlug が見つからない環境を除く）。");
             DisableInvitedBreastDynamicBones = Config.Bind(
                 "DynamicBoneThrottle", "DisableInvitedBreastDynamicBones", false,
-                "DisableInvitedDynamicBones が有効なとき、招待キャラとバディの胸の揺れ（DynamicBone_Ver02）も止めるかどうか。数が少なく負荷は小さいので、既定では止めません。変更はゲーム再起動後に反映されます。");
+                "DisableInvitedDynamicBones が有効なとき、招待キャラとバディの胸の揺れ（DynamicBone_Ver02）も止めるかどうか。数が少なく負荷は小さいので、既定では止めません。v1.16.0 からゲーム中の変更もすぐ反映されます。");
             LimitDynamicBoneIterations = Config.Bind(
                 "DynamicBoneThrottle", "LimitDynamicBoneIterations", true,
                 "すべてのキャラの揺れもの（DynamicBone / DynamicBone_Ver01）について、1フレームの計算回数を MaxIterationsPerFrame までに抑える（v1.8.0）。元の処理はフレームが遅いと1フレームで最大3回計算するため、フレームレートが下がるほど重くなる悪循環になる。フレームレートが60以上なら元々1回以下なので見た目は変わりません。変更はゲーム再起動後に反映されます。");
             MaxDynamicBoneIterationsPerFrame = Config.Bind(
                 "DynamicBoneThrottle", "MaxIterationsPerFrame", 1,
                 "LimitDynamicBoneIterations が有効なときの、1フレームあたりの揺れものの計算回数の上限（1〜2。3以上は元の処理と同じ）。");
+            EnableDynamicBoneColliderCache = Config.Bind(
+                "DynamicBoneColliderCache", "EnableColliderCache", true,
+                "揺れもの（DynamicBone / Ver01 / Ver02）の当たり判定を、結果を変えずに軽くする（v1.16.0）。ゲーム本体は、揺れものの粒ごとに全部のコライダーの位置と大きさを求め直しているため、粒とコライダーの多い髪・服（例: 233粒 × コライダー41）で1つ 6ms/f 近くかかります。"
+                + "有効な場合は、揺れもの1つの計算の最初に、コライダーの位置と大きさを1回だけ求めておき、粒ごとにはその値を使います（計算の式は元と同じなので、見た目は変わらない見込み）。"
+                + "ゲーム中の変更もすぐ反映されます（比べるときは PerfProbe の揺れものの計測を見てください）。");
+            MergeDynamicBoneColliderLoop = Config.Bind(
+                "DynamicBoneColliderCache", "MergeColliderLoop", true,
+                "EnableColliderCache が有効なとき、粒ごとのコライダーのループ全体を1回の呼び出しにまとめる（v1.16.1）。v1.16.0 の形（粒とコライダーの1組ごとに呼び出しを差し替える）より、1組あたりの時間がさらに短くなります。"
+                + "結果は元と同じ（コライダーを回る順番と条件は元のループと同じ）。ゲーム中の変更もすぐ反映されます。");
+            VerifyDynamicBoneColliderCache = Config.Bind(
+                "DynamicBoneColliderCache", "VerifyColliderCache", false,
+                "確かめる用（v1.16.0）。EnableColliderCache が有効なとき、前計算の結果と元の処理の結果を毎回比べ、違った回数と最大の差を60秒ごとのログに出します。"
+                + "元の処理も呼ぶので、有効にしている間は元より重くなります。ゲーム中の変更もすぐ反映されます。");
             EnableHVoiceCachingShortBreathFix = Config.Bind(
                 "HVoiceCachingFix", "EnableHVoiceCachingShortBreathFix", true,
                 "HVoiceCaching 0.3 を併用しているとき、kPlug のキャラ交代のたびに HVoiceCtrl.Init の中で例外（An element with the same key already exists）が出て、交代処理（AI_Public.IE_SwapGirls）の後半が実行されない問題の回避策（v1.8.3）。例外が出ると、kPlug がキャラごとの声の性格を覚え直せず、交代を重ねるうちに別の性格の声で話すようになります。また交代で外に出たキャラが「交代中」のまま残り、自分から動かなくなります。HVoiceCaching が短い吐息の辞書を空にせずに読み込むことが原因なので、その直前に本来のゲーム処理と同じく辞書を空にします。HVoiceCaching が入っていない環境では何もしません。※ kPlug ではなくゲーム本体(Assembly-CSharp)へのパッチです。変更はゲーム再起動後に反映されます。");
@@ -448,7 +488,7 @@ namespace kPlugPatcher_InviteChrID
             // 二重適用は KPlugVRNullGuards 側の適用済みキーで防いでいるため、繰り返し呼んでよい。
             if (!_patched && Time.frameCount >= _nextGuardAttemptFrame
                 && (AnyNullGuardEnabled() || EnableLazyInviteCardList.Value || EnableKPlugMemoryDiagnostics.Value
-                    || EnableMultiGuestKiss.Value || EnableStuckGuestKissFix.Value))
+                    || EnableMultiGuestKiss.Value || EnableStuckGuestKissFix.Value || VRMenuFlickerDiagnostics.EnableOrDrawOrder))
             {
                 _nextGuardAttemptFrame = Time.frameCount + GuardAttemptIntervalFrames;
                 if (AnyNullGuardEnabled()) KPlugVRNullGuards.TryApply(GetHarmony());
@@ -459,6 +499,10 @@ namespace kPlugPatcher_InviteChrID
                 // 招待メニュー（InviteUI）は Hシーン入場時に作られ、その Start() で全カードを読み込む。
                 // 300 フレーム待ちより前に Hシーンへ入っても間に合うよう、ガード類と同じくここで適用する。
                 if (EnableLazyInviteCardList.Value) LazyInviteCardList.TryApply(GetHarmony());
+
+                // VR のメニューのちらつきの診断と描く順番（DrawMenusOnTop）。招待メニューは Hシーンに入ると作られるので、それより前に当てる（VR のプロセスだけ）。
+                // v1.17.1: 診断を無効にしても、描く順番の変更は当てる（前は診断の設定だけを見ていた）
+                if (VRMenuFlickerDiagnostics.EnableOrDrawOrder) VRMenuFlickerDiagnostics.TryApply(GetHarmony());
 
                 // kPlug の招待一覧以外のメモリ消費の診断も、InviteUI.Start に間に合うようここで適用する
                 if (EnableKPlugMemoryDiagnostics.Value) KPlugMemoryDiagnostics.TryApply(GetHarmony());
@@ -559,6 +603,9 @@ namespace kPlugPatcher_InviteChrID
             // 複数人招待時の揺れもの（DynamicBone）の負荷を下げる
             DynamicBoneThrottle.TryApply(harmony);
 
+            // 揺れものの当たり判定を、結果を変えずに軽くする（設定はゲーム中に切り替えられるので、常に当てる）
+            DynamicBoneColliderCache.TryApply(harmony);
+
             // HVoiceCaching が交代のたびに HVoiceCtrl.Init の中で例外を投げ、交代処理の後半が飛ぶ問題の回避策。
             // HVoiceCaching の読み込みが終わっている必要があるため（Chainloader.PluginInfos で有無を見る）、ここで適用する。
             if (EnableHVoiceCachingShortBreathFix.Value)
@@ -640,6 +687,12 @@ namespace kPlugPatcher_InviteChrID
             if (EnableMotionIKNullTargetGuard.Value)
             {
                 MotionIKNullTargetGuard.TryApplyGame(harmony);
+            }
+
+            // 挿入中に cf_j_kokan の大きさが壊れる（Kokan_root/Kokan の NaN の警告）問題の回避策
+            if (EnableKokanNaNGuard.Value)
+            {
+                KokanNaNGuard.TryApply(harmony);
             }
 
             // kPlug / kPlugVR 本体の null チェック漏れに対する個別ガード

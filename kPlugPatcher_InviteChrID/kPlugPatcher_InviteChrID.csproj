@@ -46,6 +46,7 @@
     <Compile Include="CoordinateChangeStaleRefFix.cs" />
     <Compile Include="ParentObjectCtrlStaleRefFix.cs" />
     <Compile Include="MotionIKNullTargetGuard.cs" />
+    <Compile Include="KokanNaNGuard.cs" />
     <Compile Include="KPlugVRNullGuards.cs" />
     <Compile Include="SpotCtrlAdaptColDiagnostics.cs" />
     <Compile Include="VRInviteMenuUnblock.cs" />
@@ -54,11 +55,15 @@
     <Compile Include="KPlugMemoryDiagnostics.cs" />
     <Compile Include="KPlugPerfDiagnostics.cs" />
     <Compile Include="DynamicBoneThrottle.cs" />
+    <Compile Include="DynamicBoneColliderCache.cs" />
     <Compile Include="HVoiceCachingShortBreathFix.cs" />
     <Compile Include="HVoiceCachingVoiceListFix.cs" />
     <Compile Include="FaceListReloadOnSwap.cs" />
     <Compile Include="FaceCtrlSetFaceDiagnostics.cs" />
     <Compile Include="MultiGuestKiss.cs" />
+    <Compile Include="MenuInviteFaceShrink.cs" />
+    <Compile Include="InviteUIFaceShrink.cs" />
+    <Compile Include="VRMenuFlickerDiagnostics.cs" />
   </ItemGroup>
 
   <ItemGroup>
@@ -72,6 +77,15 @@
     </Reference>
     <Reference Include="UnityEngine">
       <HintPath>$(GameManagedPath)\UnityEngine.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <!-- uGUI と TextMeshPro（VRMenuFlickerDiagnostics で kPlugVR のメニューの部品を読むため。どちらもゲーム本体に入っている） -->
+    <Reference Include="UnityEngine.UI">
+      <HintPath>$(GameManagedPath)\UnityEngine.UI.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="TextMeshPro-1.0.55.56.0b12">
+      <HintPath>$(GameManagedPath)\TextMeshPro-1.0.55.56.0b12.dll</HintPath>
       <Private>False</Private>
     </Reference>
     <!--
