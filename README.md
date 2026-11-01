@@ -11,7 +11,7 @@ The patch and the document are MIT-licensed, so any part of them can be taken in
 
 - Games: `Koikatu` / `KoikatuVR` (`kPlugPatcher_InviteChrID.dll`), `Koikatsu Party` / `Koikatsu Party VR` (`kPlugPatcher_InviteChrID_KKP.dll`)
 - kPlug versions: 3.5.6 (tested in game, normal and VR) and 3.6.3 including the 2026-10-19 update (patches applied in normal and VR; the newer API is detected by type, not by version number)
-- Version: 1.17.1
+- Version: 1.23.1
 
 ## What it fixes
 
@@ -32,9 +32,18 @@ The patch and the document are MIT-licensed, so any part of them can be taken in
 | VR: transparent clothes of characters behind the kPlugVR menu are drawn over it, and the invite menu flickers | Draw the characters' transparent parts first (VR) |
 | `cf_j_kokan` scale becomes 0 / negative / NaN during insertion (kPlug `KokanBehavior`), with a Unity warning every frame | Skip the broken step and repair the value |
 | Frame rate drops with many characters: DynamicBone collision checks recompute every collider for every particle (game) | Compute the colliders once per DynamicBone and reuse them; the results are the same (game patch) |
+| Frame time with heavy cards: KKABMX scales a joint unevenly and Unity 5.6 rebuilds kPlug's body MeshColliders every frame (about 0.7 ms each) | Replace kPlug's marked body MeshColliders with capsules of the same size (default) or turn them off; KK normal, 6 girls: 58.8 to 34.8 ms |
+| kPlug `BonesCtrl` reads and writes Transforms for offsets that are exactly zero | Skip only the zero offsets (normal and VR) |
+| VR title screen: kPlugVR menus that overlap the title UI cannot be clicked | Give kPlugVR menus the original ray, prefer them when they are nearer, ignore the invisible drag panels, extend the beam (VR) |
+| Normal kPlug searches the whole scene every frame (H scene check, menu under cursor) | Remember the objects when they are created and check them instead; verify with the original search every 300 frames (normal mode) |
+| Character shadows cost GPU time in H with many girls | Turn off shadow casting of invited girls (default, VR and normal mode) or of everyone during H; restored when turned off or when H ends |
+| kPlugVR coordinate menu reads every coordinate card fully each time it builds the list (124 cards: about 3 s and +1.2 to 1.6 GB) | Reuse the entries of unchanged cards and read only new or changed cards (VR) |
+| kPlugVR character menu throws every frame and cannot be closed after a costume change rebuilds the bones while it is open | Re-take the bone from `BonesCtrl` (VR) |
 
 Each workaround can be turned off in the config. Diagnostics (logging only) are off by default.
-Tested in game: 1.13.0 to 1.15.0 in KK VR, 1.16.0 in KK normal mode and VR, 1.16.1 and 1.17.0 in KK normal mode. Not tested: 1.16.1 in VR, Koikatsu Party, and the 1.17.1 change (VR menu draw order with the flicker diagnostics off).
+Tested in game: 1.13.0 to 1.15.0 in KK VR, 1.16.0 in KK normal mode and VR, 1.16.1 and 1.17.0 in KK normal mode, 1.21.2 and 1.21.3 in KK VR, 1.22.0 in KK and KKP normal mode, 1.23.0 in KK normal mode, KK VR (kPlugVR 3.6.3) and KKP VR (kPlugVR 3.5.6), 1.23.1 in KK VR and KKP VR.
+The capsules (1.18.0) and the zero-offset skip (1.19.0, 1.20.0) have been in use in KK and KKP normal mode and VR since then, but grabbing, clicking, liquid and VR hand reactions with capsules were not compared one by one. Not tested: 1.16.1 in VR, and the 1.17.1 change (VR menu draw order with the flicker diagnostics off).
+Since 1.23.1 `CharacterShadowsDesktop` defaults to `Invited`. BepInEx keeps the value already in an existing config file, so change it by hand if you used 1.23.0.
 
 ## Install
 

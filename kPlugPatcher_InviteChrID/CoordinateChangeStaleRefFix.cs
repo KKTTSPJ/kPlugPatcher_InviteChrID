@@ -31,6 +31,12 @@ namespace kPlugPatcher_InviteChrID
     ///   BellyCtrl はキャラ交代（AI_Public.IE_SwapGirls の Reload）で壊れる。2026-10-19 の kPlugVR の
     ///   ログで毎フレーム 2,376 件。再取得メソッドが無いため kPlug の ChaTools.FindInCha() で t だけ取り直す。
     ///
+    ///   kPlugVR（3.599 以降）のキャラメニュー MChara は、開いたときに BonesCtrl.spine2 を refTrs に覚え、
+    ///   LateUpdate で毎フレーム位置を読む。メニューを開いたまま着替えると（Mod Bone Implantor の骨を持つキャラなど）、
+    ///   BonesCtrl はここで直っても refTrs は破棄された骨のまま残り、NRE がメニューを閉じる処理より前で起きるため、
+    ///   Hシーンを出るまで毎フレーム続く。
+    ///   refTrs が破棄されていれば BonesCtrl.spine2 を覚え直す（v1.23.1、VR のみ）。
+    ///
     /// 【D-1（SpotManagerBonesFix）との違い】
     ///   D-1 は招待直後の SpotManager.AdaptCaliber 時点での破棄を修復するもので、
     ///   本件はその後の CoordinateChanged で壊れるためタイミング的に間に合わない。
@@ -209,6 +215,25 @@ namespace kPlugPatcher_InviteChrID
         private static int _bellySkipCount;
         private const int BellySkipLogInterval = 1000;
 
+        // ---------- kPlugVR の MChara（v1.23.1） ----------
+
+        private sealed class MCharaInfo
+        {
+            public FieldInfo RefTrs;
+            public PropertyInfo Ai;
+            public FieldInfo Cha;
+            public Type BonesCtrl;
+            public FieldInfo Spine2;
+        }
+
+        private static MCharaInfo _mchara;
+
+        /// <summary>BonesCtrl の復旧を待つためにメニューの更新を休んだフレーム数（ログ用。覚え直したときに出して戻す）。</summary>
+        private static int _mcharaSkipped;
+
+        /// <summary>BonesCtrl の復旧（最大 MaxRepairAttempts 回・RepairCooldownFrames おき）を待つ上限。過ぎたらキャラの根元に付ける。</summary>
+        private const int MCharaFallbackFrames = MaxRepairAttempts * RepairCooldownFrames + 60;
+
         // ===================== 適用 =====================
 
         internal static void TryApply(Harmony harmony)
@@ -226,6 +251,48 @@ namespace kPlugPatcher_InviteChrID
                 TryPatchBindersCtrl(harmony, types);
                 TryPatchBonesCtrl(harmony, types);
                 if (PatcherPlugin.EnableBellyCtrlStaleBoneFix.Value) TryPatchBellyCtrl(harmony, types);
+                // 通常モードで kPlugVR の型に深く触れると Mono がネイティブで落ちるため、VR のプロセスだけ
+                if (assembly.GetName().Name == "kPlugVR" && BepInEx.Paths.ProcessName.EndsWith("VR", StringComparison.OrdinalIgnoreCase))
+                    TryPatchMChara(harmony, types);
+            }
+        }
+
+        private static void TryPatchMChara(Harmony harmony, Type[] types)
+        {
+            var type = types.FirstOrDefault(t => t != null && t.FullName == "kPlugVR.Menu.MChara");
+            if (type == null) return;   // kPlugVR 3.5.6 などは MChara が無い
+
+            try
+            {
+                var info = new MCharaInfo
+                {
+                    RefTrs = AccessTools.Field(type, "refTrs"),
+                    Ai = AccessTools.Property(type, "Ai"),
+                    BonesCtrl = types.FirstOrDefault(t => t != null && t.FullName == "kPlugVR.CmpChara.BonesCtrl"),
+                };
+                info.Cha = info.Ai != null ? AccessTools.Field(info.Ai.PropertyType, "Cha") : null;
+                info.Spine2 = info.BonesCtrl != null ? AccessTools.Field(info.BonesCtrl, "spine2") : null;
+                if (info.RefTrs == null || info.RefTrs.FieldType != typeof(Transform) || info.Ai == null || info.Ai.GetGetMethod(true) == null
+                    || info.Cha == null || info.Cha.FieldType != typeof(ChaControl) || info.Spine2 == null || info.Spine2.FieldType != typeof(Transform))
+                {
+                    PatcherPlugin.Logger.LogWarning($"[StaleRefFix] {type.FullName}: refTrs / Ai.Cha / BonesCtrl.spine2 が想定の形でないため回避策を適用できません。");
+                    return;
+                }
+
+                var method = AccessTools.Method(type, "LateUpdate");
+                if (method == null)
+                {
+                    PatcherPlugin.Logger.LogWarning($"[StaleRefFix] {type.FullName}.LateUpdate() が見つかりませんでした。");
+                    return;
+                }
+
+                _mchara = info;
+                harmony.Patch(method, MakePrefix(nameof(MCharaLateUpdatePrefix)));
+                PatcherPlugin.Logger.LogInfo($"[StaleRefFix] {type.FullName}.LateUpdate() に回避策を適用しました。");
+            }
+            catch (Exception ex)
+            {
+                PatcherPlugin.LogPatchFailure("[StaleRefFix]", type, ex);
             }
         }
 
@@ -814,6 +881,50 @@ namespace kPlugPatcher_InviteChrID
                 }
             }
             return removed;
+        }
+
+        /// <summary>
+        /// kPlugVR の MChara.LateUpdate の前で、破棄された refTrs を BonesCtrl.spine2 に覚え直す（v1.23.1）。
+        /// BonesCtrl の骨もまだ破棄されたまま（BonesCtrl.LateUpdate の復旧がこのフレームの後）なら、
+        /// そのフレームはメニューの更新を休む（元のまま走らせると NRE になるだけなので）。
+        /// キャラごと無いときは元の処理に任せる。
+        /// </summary>
+        private static bool MCharaLateUpdatePrefix(object __instance)
+        {
+            if (PatcherPlugin.IsQuitting) return true;
+
+            try
+            {
+                var info = _mchara;
+                if (info == null || __instance == null || !PatcherPlugin.EnableCoordinateChangeStaleRefFix.Value) return true;
+                if (!IsDestroyed(SafeGet(info.RefTrs, __instance))) return true;
+
+                object ai = info.Ai.GetValue(__instance, null);
+                var cha = SafeGet(info.Cha, ai) as ChaControl;
+                if (IsNullOrDestroyed(cha)) return true;
+
+                var bones = cha.GetComponent(info.BonesCtrl);
+                var spine2 = SafeGet(info.Spine2, bones) as Transform;
+                if (IsNullOrDestroyed(spine2))
+                {
+                    if (_mcharaSkipped++ == 0)
+                        PatcherPlugin.Logger.LogInfo($"[StaleRefFix][MChara] owner={OwnerName(cha)} のキャラメニューの基準の骨が破棄されました。BonesCtrl の復旧を待ちます（frame={Time.frameCount}）。");
+                    if (_mcharaSkipped < MCharaFallbackFrames) return false;
+                    // BonesCtrl の復旧が諦めた（MaxRepairAttempts × RepairCooldownFrames を過ぎた）。メニューを閉じられるよう、キャラの根元に付ける
+                    spine2 = cha.transform;
+                    PatcherPlugin.Logger.LogWarning($"[StaleRefFix][MChara] owner={OwnerName(cha)} の BonesCtrl の骨が戻らないため、キャラメニューをキャラの根元に付けます（frame={Time.frameCount}）。");
+                }
+
+                info.RefTrs.SetValue(__instance, spine2);
+                PatcherPlugin.Logger.LogInfo($"[StaleRefFix][MChara] owner={OwnerName(cha)} のキャラメニューの基準の骨を覚え直しました（待ったフレーム {_mcharaSkipped}。frame={Time.frameCount}）。");
+                _mcharaSkipped = 0;
+                return true;
+            }
+            catch (Exception ex)
+            {
+                SafeLogWarning("MChara", ex);
+                return true;
+            }
         }
 
         /// <summary>Unity 上で破棄済み（C# 参照は非 null だがネイティブ側が破棄されている）かどうか。</summary>

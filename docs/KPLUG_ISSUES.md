@@ -8,7 +8,7 @@ The goal is to make it easy to fix them in kPlug itself, so that this patch is n
 - Names are given for kPlug (`kPlug.*`). kPlugVR (`kPlugVR.*`) has the same code unless noted.
 - Versions: most issues were found and tested with **kPlug 3.5.6** (normal and VR). The patch was then run with **kPlug 3.6.3** (including the 2026-10-19 update, normal and VR).
   For each issue, "3.6.3" says whether the same code is still there, and whether we saw the problem in a 3.6.3 log.
-  #14–#17 were found later with kPlug / kPlugVR 3.6.3 (2026-10-21).
+  #14–#17 were found later with kPlug / kPlugVR 3.6.3 (2026-10-21), and #18–#23 with 3.6.3 (2026-10-24 to 11-01; #20 and #22 are kPlugVR 3.599+ only).
 - Stack traces come from real play logs. Koikatu's Mono does not print IL offsets for methods that are not patched (`[0x00000]`), so most stacks below have none.
   Where an offset is given, it was checked against the IL of that build.
 - Games: Koikatu and Koikatsu Party with BepInEx 5, normal and VR. The test setup has a few hundred character cards and many mods.
@@ -34,6 +34,14 @@ The goal is to make it easy to fix them in kPlug itself, so that this patch is n
 | 15 | Invite menu face textures (`InviteUI.Start`, `MenuInvite.GetChaInfoList`) | Hundreds of MB of GPU and CPU memory; normal mode: kept after H, even on the title screen | memory | found in 3.6.3 | `InviteUIFaceShrink.cs`, `MenuInviteFaceShrink.cs` / `ShrinkInviteMenuFaces`, `ReleaseInviteMenuFaces`, `ShrinkVRMenuFaces` |
 | 16 | kPlugVR 3.599+ VR menus (world-space Canvas) | Transparent clothes behind a menu are drawn over it; the invite menu flickers | draw order | found in 3.6.3 VR | `VRMenuFlickerDiagnostics.cs` / `DrawMenusOnTop`, `Method` |
 | 17 | `CmpChara.KokanBehavior` | Unity warning "Infinity or NaN … for a Collider" every frame during insertion (tens of thousands per session) | division by frame time | found in 3.6.3 VR | `KokanNaNGuard.cs` / `EnableKokanNaNGuard` |
+| 18 | Body MeshColliders from `Tools.ChaTools.AddColliders` on cards with KKABMX | About 0.7 ms per collider per frame; KK normal, 6 girls: 58.8 ms instead of 34.8 ms | performance (Unity 5.6) | found in 3.6.3 | `KPlugBodyColliderCapsule.cs` / `MeshColliderMode` |
+| 19 | `CmpChara.BonesCtrl.LateUpdate` | CPU time for offsets that are zero | performance | found in 3.6.3 | `ZeroBodyOffsetOptimization.cs` / `SkipZeroBodyOffsets` |
+| 20 | kPlugVR 3.599+ menus on the VR title screen | A kPlugVR menu that overlaps the title UI cannot be clicked | raycast order (VRTK, uGUI) | found in 3.6.3 VR | `VRMenuRayFix.cs` / `FixRayForKPlugMenus`, `PreferKPlugMenu` |
+| 21 | Normal kPlug `DefAndParse.ParserScene.InH`, `MenuCtrl.CursorIsOverMenus` | Several ms per frame for scene-wide searches, growing with the scene | performance | found in 3.6.3 normal | `KPlugSceneSearchCache.cs` / `CacheHSceneCheck`, `CacheMenuCursorCheck` |
+| 22 | kPlugVR 3.599+ coordinate menu (`Menu.SubMChara.MCosplay.Init`) | About 3 s and +1.2–1.6 GB each time the list is built (124 cards); old thumbnails are not destroyed | memory, load time | found in 3.6.3 VR | `VRCoordinateListCache.cs` / `CacheVRCoordinateList` |
+| 23 | kPlugVR 3.599+ character menu (`Menu.MChara.LateUpdate`) | NRE every frame after a costume change while the menu is open; the menu cannot be closed until H ends | stale reference | found in 3.6.3 VR | `CoordinateChangeStaleRefFix.cs` / `EnableCoordinateChangeStaleRefFix` |
+
+The patch also has an option to turn off character shadows during H (`InvitedCharacterShadows.cs` / `CharacterShadowsVR`, `CharacterShadowsDesktop`). It is a performance setting, not a kPlug issue, so it is not listed here.
 
 ## Common cause of #1–#3 (and of several in #13)
 
@@ -507,6 +515,91 @@ In our VR logs the main cause was frames with `Time.deltaTime` = 0 (13,775 and 4
 
 **Patch.** Exactly that: the squash is skipped for those calls (limit 0.15 m per frame), and after `KokanBehavior.LateUpdate` a non-finite or out-of-range scale (0.05–5) of `cf_j_kokan` is repaired.
 Result in KK VR: 0 warnings (the same kind of session had 29,260). We have not specifically checked how the doggy position looks with the patch.
+
+## 18. Body MeshColliders on cards with KKABMX joint scale
+
+**What the player sees.** Low frame rate with some cards, mostly when several of them are in H. In KK normal mode with 6 girls and 1 man, the frame took about 58.8 ms instead of about 34.8 ms; in KK VR with 5 girls, 48.5 ms instead of 35.3 ms.
+
+**Cause.** `Tools.ChaTools.AddColliders` adds MeshColliders to body parts (chest, neck, waist, thighs, shins, feet, upper arms, forearms, hands) under the character's joints.
+When KKABMX scales a joint unevenly (for example `cf_j_thigh00` or `cf_j_leg01` wider than long), Unity 5.6 appears to rebuild every MeshCollider under that joint every frame. Each one took about 0.7 ms per frame.
+Turning the MeshColliders off removed the cost (about 0.5 ms left for KKABMX in total). Koikatsu Sunshine (Unity 2019) did not show the cost with the same cards.
+
+**Suggested fix.** Use primitive colliders (capsules or boxes) for these body parts. Primitive colliders do not need to be rebuilt when their parent is scaled unevenly.
+
+**Patch.** `MeshColliderMode = Capsule` (default): after `AddColliders`, each MeshCollider that has kPlug's part marker (`ColDefinition`) is disabled, and a CapsuleCollider of the same size is added on the same object, so the part is still hit (the shape is a little thicker).
+`Disable` only turns them off (the part is then no longer hit; in VR the hand no longer reacts to the arms and legs). `Keep` restores the MeshColliders. Result: about 34.8 ms (normal) and 35.3 ms (VR) in the cases above.
+We have not compared grabbing, clicking, liquid and VR hand reactions with capsules one by one; they have been in normal use since then without problems that we noticed.
+
+## 19. `BonesCtrl.LateUpdate` works on offsets that are zero
+
+**What the player sees.** Nothing visible; CPU time per character.
+
+**Cause.** Every frame, `BonesCtrl.LateUpdate` adds position and rotation offsets to the root, waist, spine, neck and head bones (10 places, such as the `spine2_rOfst` offset). Most of them are zero most of the time, but the Transform is still read and written.
+
+**Suggested fix.** Skip the read and write when the final offset is exactly zero.
+
+**Patch.** `SkipZeroBodyOffsets`: a transpiler adds an "is it exactly zero" check before each of the 10 additions and skips only those; non-zero offsets and the code that overwrites the bones run as before. In a KK VR test the bone work took about 0.40 ms less per frame (52%).
+
+## 20. kPlugVR 3.599+: menus on the VR title screen cannot be clicked where they overlap the title UI
+
+**What the player sees.** On the VR title screen, a kPlugVR menu does not react to clicks where it overlaps the area of the title UI (where the pointer turns green). Koikatsu Sunshine's ksPlugVR has the same problem.
+
+**Cause.** Three things together:
+- VRTK's `VRTK_VRInputModule.CheckRaycasts` passes the ray to each Canvas through `pointerEventData.pointerCurrentRaycast`, and `VRTK_UIGraphicRaycaster.Raycast` overwrites it with its own hit. Every Canvas checked after a hit gets a ray that starts at the hit point with a zero direction, and misses.
+  The kPlugVR menu is shown with `menuGo.SetActive(true)`, and `VRTK_UICanvas.OnEnable` adds its raycaster again, so the menu is always checked after the title Canvas.
+- uGUI sorts hits by `sortingOrder` before distance. The title Canvas has `sortingOrder` 50 and the kPlugVR menu 0, so the title UI wins even when the menu is nearer.
+- The title Canvas is large and tilted. Near the center the menu is behind the plane of the Canvas's invisible drag panel (`VRTK_UICANVAS_DRAGGABLE_PANEL`), so even a distance check picks the panel.
+
+**Suggested fix.** Give the kPlugVR menu Canvases a `sortingOrder` above the title Canvas, and make sure their raycasts are not after another Canvas's hit (for example, check the menu Canvases first, or hide or disable raycasts on the title Canvas while a kPlugVR menu is open).
+
+**Patch.** `FixRayForKPlugMenus`: while `CheckRaycasts` checks a kPlugVR menu Canvas, the original ray is restored; when comparing distances, other Canvases' drag panels are ignored; and the pointer beam is extended to the menu when the menu is chosen.
+`PreferKPlugMenu = WhenNearer`: when a kPlugVR menu element is nearer than the first hit, the menu elements are moved to the front (keeping their order). In KK VR both are needed; the menu can then be clicked everywhere.
+
+## 21. Normal kPlug: scene-wide searches every frame
+
+**What the player sees.** Lower frame rate in H, more so in larger scenes.
+
+**Cause.** `DefAndParse.ParserScene.InH()` searches the whole scene for `HFlag` (`FindObjectOfType`). `Core.Update` calls it twice per frame in H, and once per frame outside H.
+`MenuCtrl.CursorIsOverMenus()` searches the whole scene for all `MenuCtrl` (`FindObjectsOfType`) once per frame from `HCtrl.LateUpdate`.
+The time grows with the number of objects in the scene, not with the number of characters: with 6 girls about 3.6 ms and 1.9 ms per frame; in a test with 10 copies of the same character 4.5–9.0 ms per frame in total. kPlugVR's `InH` only checks a singleton, so VR is not affected.
+
+**Suggested fix.** Keep a reference to the `HFlag` of the current H scene (or set a flag when H starts and ends), and keep a list of `MenuCtrl` instances that they add themselves to and remove themselves from.
+
+**Patch.** `CacheHSceneCheck` / `CacheMenuCursorCheck`: `HFlag.Start` and the `MenuCtrl` constructor are used to remember the objects, and the two methods check only those (not destroyed and `activeInHierarchy`, as `FindObjectOfType` does).
+After each scene load and every `VerifyIntervalFrames` (300) frames, the original search runs once and the results are compared; a mismatch is logged and the objects are remembered again.
+Result in KK normal mode with 5 girls: about 21.2 ms → 17.0 ms per frame. 0 mismatches in KK and Koikatsu Party. When the GPU is the limit, the frame rate hardly changes.
+
+## 22. kPlugVR 3.599+: the coordinate menu reads every coordinate card fully each time
+
+**What the player sees.** A stop of about 3 s, and memory grows by about 1.2–1.6 GB each time (124 coordinate cards). The menu list is built when `VRDealer.SetContext` changes the context (for example around the character select and H).
+
+**Cause.** `Menu.SubMChara.MCosplay.Init` loads every card in `UserData/coordinate` with `ChaFileCoordinate.LoadFile` (including extended data), and makes a thumbnail texture and material for each one from the PNG.
+The previous textures and materials are not destroyed. From the list, only the name, the file path and the thumbnail material are used; when a coordinate is applied, the card is read again from the file (`ApplyCoordinate`, `ToolMaps`).
+
+**Suggested fix.** Keep the list between calls and read only cards whose size or modification time changed. To decide whether a file is a coordinate card, reading the header up to the data length is enough (the full data is not needed for the list). Destroy the textures and materials of entries that are removed or replaced, and release the CPU copy of the thumbnails (`Apply(false, true)`).
+
+**Patch.** `CacheVRCoordinateList`: a prefix on `MCosplay.Init` builds the list in the same file order, reuses the entries of unchanged cards, reads only new or changed cards (header only, the same checks as the game's `ChaFileCoordinate.LoadFile` up to the data), and destroys old textures and materials.
+The entry's `coordinate` is an empty `ChaFileCoordinate` (it is not read outside the list). A card whose data is broken only in the compressed part would be listed (the original drops it); applying it then fails in kPlugVR's `LoadFile` and does nothing.
+Result in KK VR: first build 124 cards in about 0.7 s with no memory growth, later builds about 10 ms, and an added card is read alone (30 ms for 6 new cards).
+
+## 23. kPlugVR 3.599+: the character menu keeps a destroyed bone after a costume change
+
+**What the player sees.** After changing a character's costume from the coordinate menu while the character menu is open, an NRE is logged every frame, and the character menu cannot be closed until the H scene ends. One session had 3,934 of them.
+
+```
+NullReferenceException
+  at (wrapper managed-to-native) UnityEngine.Transform:INTERNAL_get_position (UnityEngine.Vector3&)
+  at UnityEngine.Transform.get_position ()
+  at kPlugVR.Menu.MChara.LateUpdate ()
+```
+
+**Cause.** `MChara.Start` stores `BonesCtrl.spine2` in `refTrs`, and `MChara.LateUpdate` reads its position every frame. A costume change can rebuild the body bones (it happened with a card that uses Mod Bone Implantor, which removed 141 implanted bones), so `refTrs` points to a destroyed Transform.
+This is the same pattern as §2: `BonesCtrl` itself is repaired by the patch, but `MChara` keeps its own copy. The exception is thrown before the code that destroys the menu when `ShowMenu` is false, so the menu stays.
+
+**Suggested fix.** Read `BonesCtrl.spine2` again when `refTrs` is destroyed (or read it from `BonesCtrl` every frame instead of keeping a copy).
+
+**Patch.** A prefix on `MChara.LateUpdate` (VR only): when `refTrs` is destroyed, it is set to the current `BonesCtrl.spine2`. If that is still destroyed in that frame (the `BonesCtrl` repair runs later), the menu update is skipped for that frame; if the bone does not come back after a few seconds, the menu follows the character's root so it can still be closed.
+Result in KK VR: 14 costume changes with the menu open, 14 repairs (each in the same frame), 0 NREs, and the menu closed normally.
 
 ## License of this document and the patch
 

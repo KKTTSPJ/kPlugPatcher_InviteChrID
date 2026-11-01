@@ -22,7 +22,7 @@
 - **整合性の維持**: 改名がキャラクターデータそのものに適用されるため、`kPlug` の在席判定・生成されるキャラクター・表示名辞書・名前指定APIのすべてが同じ名前を参照します。これにより退場処理や名前指定操作が正しく動作します。なお在席リストの持ち方は非VR版（`InviteUI.PresentNames`）とVR版（`mainAi`/`secondAi`/`harem` から都度組み立て）で異なるため、両方式に対応しています。
 - **ゲーム内での識別**: 同じキャラカードを複数招待しても、それぞれが別の名前を持つため、ゲーム内および他プラグインから別個体として区別できます。
 - **招待無反応の回避 (v1.2.0〜)**: `SpotManager.AdaptCaliber` の直前に破棄済みのボーン参照を検出し、 kPlug 自身の `BonesCtrl.FindBones()` を呼び直して復旧します。独自のボーン探索は行わないため影響範囲が限定されます。
-- **衣装変更後の破棄済み参照の回避**: 招待・キャラ交代後に衣装が再構築されると、kPlug の `ColDefsManager` / `BindersCtrl` / `BonesCtrl` が破棄済みの参照を掴んだまま毎フレーム例外を出し続けることがあります。破棄済み要素の除去と `BonesCtrl.FindBones()` の再呼び出しで復旧します。
+- **衣装変更後の破棄済み参照の回避**: 招待・キャラ交代後に衣装が再構築されると、kPlug の `ColDefsManager` / `BindersCtrl` / `BonesCtrl` が破棄済みの参照を掴んだまま毎フレーム例外を出し続けることがあります。破棄済み要素の除去と `BonesCtrl.FindBones()` の再呼び出しで復旧します（v1.23.1 から kPlugVR のキャラメニューも）。
 - **絶頂ループの回避（ゲーム本体へのパッチ）**: 上記と同種の原因で、ゲーム本体の `ParentObjectCtrl` が破棄済みの小物 GameObject を参照して例外を起こし、その結果 `HSonyu.Proc` の絶頂終了処理（ゲージのリセット）が実行されずに絶頂状態がループする不具合を回避します。
 - **kPlugVR の null チェック漏れへのガード (v1.3.1〜)**: kPlugVR 本体が出す NullReferenceException のうち、原因が特定できたものを原型の挙動を変えない範囲で防ぎます（`KPlugVRNullGuards`）。
   `VRCtrl.SetMenuVisibility` / `VRCtrl.LateUpdate`（タイトル用 VRCtrl の自壊フレーム）、 `HinputParser.Chain`（入力の未代入）、`AI_Public.LateUpdate`（生成直後の `bc.kb`）。
@@ -80,6 +80,17 @@
 - **招待キャラの表情のコルーチンの NRE の診断 (v1.10.2、`EnableSetFaceNreDiagnostics`)**: 読み取り専用の診断（既定は無効）。kPlug の `FaceCtrl.IE_SetFace` が NullReferenceException を出したときだけ、キャラ名・表情の種類・アヘ顔の状態と、コルーチンがたどる参照（`ai.Cha`、`Core.config`、`hProc.voice.faceLists[0]`、`mouthCtrl`、`customMatFace` など）が null かどうかをログ出力します。例外は抑止しません。
 - **性能・メモリの診断 (v1.6.1〜、`KPlugMemoryDiagnostics` / `KPlugPerfDiagnostics`)**: 読み取り専用の診断。
   30秒ごとのフレーム時間と kPlug・ゲーム本体のメソッド別の処理時間、キャラの読み込み・交代の所要時間、招待の前後のメモリ、シーン変化時の RenderTexture の作成元別の内訳などをログに出します。
+- **体の MeshCollider をカプセルに差し替え (v1.18.0、`MeshColliderMode`)**: KKABMX でキャラの関節（太もも・すねなど）に縦横で違う大きさの修飾があると、Unity 5.6 がその下にある kPlug の MeshCollider を毎フレーム作り直しているとみられ、1本 約0.7ms/f かかります。既定の `Capsule` は、kPlug の部位の印がある MeshCollider（胸部・首・腰・太もも・すね・足・上腕・前腕・手）を止め、同じ大きさのカプセルに差し替えます（形は少し太りますが、部位の判定は残ります）。`Keep` で元に戻し、`Disable` で止めるだけにできます（止めた部位は kPlug の判定に当たらなくなります）。ゲーム中に切り替えられます。KK の通常モードの女6男1で、フレームが約58.8msから約34.8msになりました（KK VR の女5男1で 48.5ms → 35.3ms）。KK・KKP の通常モード・VR が対象です（サンシャインは Unity が新しく、効果がありません）。
+- **補正がゼロのときの骨の処理を省く (通常 v1.19.0、VR v1.20.0、`SkipZeroBodyOffsets`)**: kPlug の `BonesCtrl.LateUpdate` が root・腰・胴体・首と頭に足す補正（10か所）のうち、最終的な補正がちょうど0のものだけ、Transform の読み書きを省きます。0でない補正と、上書きする処理はそのままです。既定 true、ゲーム中に false にするとこの機能だけを止められます。KK VR の試験で、骨の処理が約0.40ms/f（52%）短くなりました。
+- **タイトル画面の VR のメニューのクリック (v1.21.0〜v1.21.3、`FixRayForKPlugMenus` / `PreferKPlugMenu`)**: VR のタイトル画面で、kPlugVR のメニューがタイトルの UI の範囲（レイが緑になる範囲）に重なると、メニューをクリックできない問題の回避策です。原因は3つあります。
+  - VRTK はキャンバスを1つずつ調べるとき、当たったキャンバスがレイを書き換えるため、後に調べるキャンバスには必ず当たりません。kPlugVR のメニューは表示するたびに調べる順番が最後になります。kPlugVR のメニューを調べるときだけ元のレイに戻します。
+  - タイトルの UI は sortingOrder 50 で、uGUI は距離より先に sortingOrder で選ぶため、手前の kPlugVR のメニューより奥のタイトルの UI が選ばれます。kPlugVR のメニューが手前にあるときだけ先頭にします（`PreferKPlugMenu = WhenNearer`）。
+  - タイトルの UI のキャンバスは大きく斜めに置かれていて、中央付近では kPlugVR のメニューがその面より奥になります（手前にあるのは見えない透明な板だけ）。手前か比べるときにこの板を数えず、板で止まって見える手のビームもメニューまで伸ばします。
+  - KK のタイトル画面では2つの設定がどちらも要ります。どちらもゲーム中に切り替えられます。VR のみが対象です。KK VR で、タイトルの UI に重なった所でもクリックでき、ビームもメニューまで届くことを確認しました。
+- **通常版 kPlug の毎フレームのシーン全体の検索を軽くする (v1.22.0、`KPlugSearchCache`)**: 通常版 kPlug は、Hシーンかどうかの判定（`ParserScene.InH`、Hシーン中は2回/f、行動中も毎フレーム）と、カーソルがメニューの上かの判定（`MenuCtrl.CursorIsOverMenus`、Hシーン中に毎フレーム）のたびに、シーン全体から対象を探します。この時間は人数よりシーンの部品の数で増えます。`HFlag` と kPlug のメニューが作られたときに覚えておき、それが残っているかの確認に置き換えます。シーンの読み込み後と300フレームごとに元の検索で照合し、食い違えばログに出して覚え直します。既定 true、2つの判定を別々にゲーム中に切り替えられます。通常モードだけが対象です（kPlugVR の判定はもともと軽い）。KK の通常モードの女5人で、フレームが約21.2msから約17.0msになりました。KKP でも動作を確認しました（照合の食い違いはどちらも0回）。GPU が限界の条件では、空いた CPU の時間が GPU 待ちになり、フレームはほとんど変わりません。
+- **Hシーンのキャラの投射影を止める (v1.23.0〜、`CharacterShadowsVR` / `CharacterShadowsDesktop`)**: Hシーンの間、キャラが地面や他のキャラに落とす影を止めます。`Invited` は招待キャラとバディだけ（メインのキャラと男の影は残す）、`All` は全キャラ、`Keep` は元のままです。既定は VR・通常モードとも `Invited`（通常モードは v1.23.1 から）。1秒に1回対象を選び直すので、招待・交代・着替えの後も1秒以内に当たります。`Keep` にしたときと Hシーンを出たときは元に戻します。影だけを描く部品（`ShadowsOnly`）は、影を止める代わりに部品ごと止めます（影を止めると本体が見えてしまうため）。他の処理が書き換えた部品には触りません。ゲーム中に切り替えられます。KK VR の女3で、Invited は GPU 約2.4ms・All は約3.1ms 短くなりました。KK の通常モードの女4（GPU が限界の条件）では、Invited で約3.0ms（37fps → 41fps）、All で約6.2ms（45fps 前後）短くなりました。
+- **kPlugVR の衣装一覧を使い回す (v1.23.0、`CacheVRCoordinateList`)**: kPlugVR（3.599 以降）の衣装メニュー（Cosplay）は、一覧を作るたびに `UserData/coordinate` の全カードを完全に読み、サムネイルを作り直します（124件で約3秒、メモリが1回ごとに約1.2〜1.6GB 増え、古いサムネイルは破棄されない）。前回から大きさと更新日時が変わっていないカードは前回の項目を使い回し、新しい・変わったカードだけを読みます。衣装カードかどうかは、カードの先頭だけを読んで決めます。消えた・変わったカードのサムネイルは破棄します。衣装を着せるときは、今までどおり kPlugVR がファイルから読みます。KK VR で、1回目 124件 約0.7秒（メモリの増加なし）、2回目から使い回して約10ms、カードを足したときは足した分だけ読むことを確認しました。VR のみが対象です。kPlugVR 3.5.6 には衣装一覧が無いので何もしません。
+- **キャラメニューを開いたまま着替えたときの毎フレーム NRE の回避 (v1.23.1)**: kPlugVR（3.599 以降）のキャラメニューは、開いたときにキャラの胴体の骨を覚えて、毎フレームその位置に付いていきます。メニューを開いたまま着替えて骨が作り直されると（Mod Bone Implantor の骨を持つキャラなど）、`BonesCtrl` は上の回避策で直っても、メニューは破棄された骨を持ったまま毎フレーム NRE になり、メニューを閉じる処理より前で止まるため、Hシーンを出るまで閉じられませんでした。骨が破棄されていれば、`BonesCtrl` の骨を覚え直します。`EnableCoordinateChangeStaleRefFix` に従います。VR のみが対象です。KK VR で、メニューを開いたまま14回着替えて、14回とも覚え直し、この NRE が 0件（修正前は 3,934件）になり、メニューを閉じられることを確認しました。
 
 ### 併用を推奨するプラグイン（kPlug 環境の負荷対策。本プラグインの外）
 - **KK_METextureLeakFix**（自作の独立プラグイン）: KK_MaterialEditor 4.0.2 が、キャラを破棄してもテクスチャ（RenderTexture）を解放しない問題の回避策。kPlug で違うカードを招待するたびに積み上がっていた約 4GB が、Hシーンを出た後に解放されます（退出後のコミット 9.2GB → 5.4GB）。
@@ -138,6 +149,8 @@ KK版（`Release_KK`）と KKP版（`Release_KKP`）が両方ビルドされ、`
 - メインヒロイン・セカンドヒロイン（セーブデータ由来）と同じ姓名を持つ別カードは、招待候補一覧にそもそも表示されない場合があります（kPlug側の在席判定が本プラグインの改名処理より手前の段階で行われるため）。
 - **v1.13.0〜v1.17.1 の確認の範囲**: v1.13.0〜v1.15.0 は KK の VR、v1.16.0（揺れものの当たり判定）は KK の通常モード・VR、v1.16.1 と v1.17.0 は KK の通常モードで確認しています。
   v1.16.1 の VR、KKP、v1.17.1 の変更（ちらつきの診断を無効にしたときの描く順番）、v1.15.0 の後背位の見た目は確認していません。
+- **v1.18.0〜v1.23.1 の確認の範囲**: v1.18.0（カプセル）は KK の通常モード・VR で差し替えのログを確認し、その後の KK・KKP の通常モード・VR のプレイで既定のまま使っています。カプセルの間の、つかみ・クリック・液体・VR の手の反応を個別に比べる確認はしていません。v1.19.0・v1.20.0 は試験版で効果を確かめ、正式版は KK の通常モード・VR で使っています。v1.21.2・v1.21.3 は KK VR、v1.22.0 は KK・KKP の通常モード、v1.23.0 は KK の通常モード・KK VR（kPlugVR 3.6.3）・KKP VR（kPlugVR 3.5.6）、v1.23.1 は KK VR・KKP VR で確認しました。v1.23.1 の通常モードの既定値の変更（`CharacterShadowsDesktop = Invited`）は、既定値だけの変更です（`Invited` の動作は v1.23.0 で確認）。
+- **既にある設定ファイルの値は変わりません**: v1.23.1 で `CharacterShadowsDesktop` の既定を `Invited` にしましたが、BepInEx は既にある設定ファイルの値を書き換えません。v1.23.0 を使っていた場合は、手で `Invited` にするか、その行を消して作り直してください。
 - **サードパーティ製チートツール`KK_CheatTools`（[ManlyMarco/IllusionCheatTools](https://github.com/ManlyMarco/IllusionCheatTools)）の「Unlock invalid H positions as well」設定が有効だと、Inviteアイコンが恒久的に無反応になります。** この設定はゲーム本体のHシーン体位絞り込み(`H.HSceneProc.CreateListAnimationFileName`)を無効化し、本来選ばれないはずのDLC専用体位が毎回Hシーン開始体位として選ばれてしまうため、kPlugの`isValidCtx`判定が`Normal`以外の値に固定されてしまいます。kPlug・本プラグインどちらの不具合でもなく、対処は当該チート設定を無効化することです。
 
 ## 7. 設定項目
@@ -203,6 +216,17 @@ KK版（`Release_KK`）と KKP版（`Release_KKP`）が両方ビルドされ、`
 | `HVoiceCachingFix` | `EnableHVoiceCachingVoiceListFix` | bool | `true` | HVoiceCaching 0.3 併用時に、3P（女の子2人）の Hシーンがロード画面のまま進まなくなる問題の回避策（v1.9.1）。HVoiceCaching が1人目だけキャッシュから読んで本来の読み込みに戻したとき、声の辞書を `Init` 直後の状態に戻してから読ませる。HVoiceCaching が無ければ何もしない。**ゲーム本体(Assembly-CSharp)へのパッチ** |
 | `SetFaceDiagnostics` | `EnableSetFaceNreDiagnostics` | bool | `false` | kPlug `FaceCtrl.IE_SetFace` の NRE の原因を調べる診断（v1.10.2、読み取り専用）。例外が出たときだけ、キャラ・表情の種類・アヘ顔の状態と、コルーチンがたどる参照の null の有無を記録する。例外は抑止しない |
 | `FaceListFix` | `EnableFaceListReloadOnSwap` | bool | `true` | kPlug のキャラ交代で、表情リスト（`HFaceList`）を交代後のキャラの性格で読み直す（v1.8.4）。kPlug は声のリストしか読み直さないため、交代後もHシーン開始時のメインキャラの性格の表情になる問題の対策。招待キャラの表情も今のメインキャラの性格の表になる。**ゲーム本体(Assembly-CSharp)へのパッチ** |
+| `KPlugBodyCollider` | `MeshColliderMode` | enum | `Capsule` | kPlug が体に付ける MeshCollider（胸部・首・腰・太もも・すね・足・上腕・前腕・手）の扱い（v1.18.0）。`Keep`: 元のまま。`Disable`: 止める（その部位は kPlug の判定に当たらなくなる）。`Capsule`: 止めて同じ大きさのカプセルに差し替える（形は少し太るが部位の判定は残る）。KK・KKP の通常・VR が対象。ゲーム中に切り替え可（`Keep` に戻すと MeshCollider を元に戻す） |
+| `KPlugPerformance` | `SkipZeroBodyOffsets` | bool | `true` | kPlug の `BonesCtrl` の root・腰・胴体・首と頭の加算の補正がちょうど0のときだけ、Transform の読み書きを省く（通常 v1.19.0、VR v1.20.0）。0でない補正・上書きの処理は元のまま。ゲーム中に切り替え可 |
+| `KPlugPerformance` | `CharacterShadowsVR` | enum | `Invited` | VR の Hシーンの間、キャラの投射影を止める（v1.23.0）。`Keep`: 元のまま。`Invited`: 招待キャラとバディだけ（メインのキャラと男の影は残す）。`All`: 全キャラ。ゲーム中に切り替え可 |
+| `KPlugPerformance` | `CharacterShadowsDesktop` | enum | `Invited` | 通常モードの Hシーンで、キャラの投射影を止める（v1.23.0。既定は v1.23.1 から `Invited`）。選択肢は `CharacterShadowsVR` と同じ。ゲーム中に切り替え可 |
+| `KPlugPerformance` | `CacheVRCoordinateList` | bool | `true` | kPlugVR（3.599 以降）の衣装一覧を使い回し、新しい・変わったカードだけを読む（v1.23.0）。VR のみ。次に一覧を作るときから反映 |
+| `VRMenuRaycast` | `FixRayForKPlugMenus` | bool | `true` | タイトル画面で、kPlugVR のメニューがタイトルの UI に重なるとクリックできない問題の回避策（v1.21.0〜v1.21.3）。kPlugVR のメニューを調べるときだけ元のレイに戻す、手前か比べるときに他のキャンバスの透明な板を数えない、優先したときに手のビームをメニューまで伸ばす、の3つをまとめて切り替える。VR のみ。ゲーム中に切り替え可 |
+| `VRMenuRaycast` | `PreferKPlugMenu` | enum | `WhenNearer` | レイが kPlugVR のメニューに当たっているのに他のキャンバスが先に選ばれるとき、kPlugVR のメニューを優先するか（v1.21.1）。`Off`: 元の順番。`WhenNearer`: kPlugVR のメニューの方が手前のときだけ。`Always`: 当たっていれば常に。KK のタイトル画面では `FixRayForKPlugMenus` と両方が要る。VR のみ。ゲーム中に切り替え可 |
+| `VRMenuRaycast` | `LogRaycastHits` | bool | `false` | 確かめる用（v1.21.0）。レイの当たり先の先頭が変わったときに、上位4つと元のレイに戻した数をログに出す（シーンごとに80行まで） |
+| `KPlugSearchCache` | `CacheHSceneCheck` | bool | `true` | 通常版 kPlug の Hシーンの判定（`ParserScene.InH`）の、毎フレームのシーン全体の検索を、覚えておいた `HFlag` の確認に置き換える（v1.22.0）。通常モードのみ。ゲーム中に切り替え可 |
+| `KPlugSearchCache` | `CacheMenuCursorCheck` | bool | `true` | 通常版 kPlug の「カーソルがメニューの上か」の判定（`MenuCtrl.CursorIsOverMenus`）の、毎フレームのシーン全体の検索を、覚えておいた kPlug のメニューの確認に置き換える（v1.22.0）。通常モードのみ。ゲーム中に切り替え可 |
+| `KPlugSearchCache` | `VerifyIntervalFrames` | int | `300` | 上の2つが有効なとき、何フレームごとに元の全体検索で照合するか（0〜100000。0 はシーンの読み込み後だけ）。食い違えばログに出して覚え直す |
 | `MultiGuestKiss` | `EnableMultiGuestKiss` | bool | `true` | 招待キャラ複数との同時キス（v1.9.0）。ほかの招待キャラがキス中のときだけ、下の範囲に入った2人目以降のキスも始める。VRのみ |
 | `MultiGuestKiss` | `StartDistance` | float | `0.18` | 2人目以降のキスを始める距離（m、鼻とヘッドセット）。kPlug 3.56 の本来の範囲は 0.12m（KissDist で ±0.1m）（設定できる範囲 0.05〜0.5） |
 | `MultiGuestKiss` | `StartAngle` | float | `30` | 2人目以降のキスを始める角度（度、正面からのずれ）。kPlug の本来の範囲は 25°（設定できる範囲 5〜90） |
@@ -220,5 +244,5 @@ KK版（`Release_KK`）と KKP版（`Release_KKP`）が両方ビルドされ、`
 - 本プラグインは kPlug の動作を実行時に書き換えます。**kPlug のバージョンが変わると対象のメソッドが見つからず、機能の一部または全部が無効になることがあります**（その場合はログに理由が出ます）。
 
 ---
-作成日時: 2026年6月11日 / 最終更新: 2026年10月22日 (v1.17.1)
+作成日時: 2026年6月11日 / 最終更新: 2026年11月1日 (v1.23.1)
 作成者: Gemini CLI / Claude Opus 5

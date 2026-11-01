@@ -52,7 +52,7 @@ namespace kPlugPatcher_InviteChrID
         private const string LegacyGuid = "com.your.kkp.kplugpatcher";
         public const string PluginName = "KKP kPlug Patcher Invite ChrID";
 #endif
-        public const string Version = "1.17.1";
+        public const string Version = "1.23.1";
 
         internal static new ManualLogSource Logger;
         internal static bool IsQuitting = false;
@@ -90,6 +90,8 @@ namespace kPlugPatcher_InviteChrID
         internal static ConfigEntry<bool> EnableMotionIKNullTargetGuard;
         // kPlug / kPlugVR の KokanBehavior が挿入中に cf_j_kokan の大きさを壊す（Kokan_root/Kokan の NaN の警告）問題の回避策（v1.15.0）
         internal static ConfigEntry<bool> EnableKokanNaNGuard;
+        internal static ConfigEntry<KPlugBodyColliderMode> KPlugBodyColliderModeSetting;
+        internal static ConfigEntry<bool> SkipZeroBodyOffsets;
 
         // kPlugVR 本体の null チェック漏れに対する個別ガード（KPlugVRNullGuards）の設定
         internal static ConfigEntry<bool> EnableVRRootMenuVisibilityGuard;
@@ -252,6 +254,11 @@ namespace kPlugPatcher_InviteChrID
             EnableMotionIKNullTargetGuard = Config.Bind(
                 "MotionIKNullTargetGuard", "EnableMotionIKNullTargetGuard", true,
                 "ゲーム本体の MotionIK.LinkIK が、手足の IK の目標（effector.target）や曲げの目標（bend.bendGoal）が null のときに NullReferenceException を起こす問題の安全網（v1.10.6）。この例外はアニメーションの切り替え（HActionBase.SetPlay）の途中で起きるため、HSonyu.Proc の絶頂の終了処理（finish の解除・ゲージのリセット）が飛び、絶頂が繰り返されます。目標が null の手足だけを飛ばし、残りの手足とアニメーションの切り替えの後ろの処理を実行させます。原因が kPlug 以外でも効きます。どのキャラ・どの手足かを最初の1回と50回ごとにログ出力します。※本項目は kPlug ではなくゲーム本体(Assembly-CSharp)へのパッチです。変更はゲーム再起動後に反映されます。");
+            SkipZeroBodyOffsets = Config.Bind("KPlugPerformance", "SkipZeroBodyOffsets", true,
+                "BonesCtrlのroot・腰・胴体・首頭の加算補正が厳密にゼロの場合だけTransformの読み書きを省略します（通常v1.19.0、VR v1.20.0）。非ゼロ・不正参照・上書き処理は元のまま。KK/KKP通常・VR対応。ゲーム中に個別切替可、falseで元の処理。初回は動作中の骨を確認後に適用します。BonesCtrl を書き換える他のプラグインとは併用しないでください。");
+            KPlugBodyColliderModeSetting = Config.Bind(
+                "KPlugBodyCollider", "MeshColliderMode", KPlugBodyColliderMode.Capsule,
+                "kPlug が体に付ける MeshCollider（胸部・首・腰・太もも・すね・足・上腕・前腕・手）の扱い（v1.18.0）。Keep = 元のまま、Disable = 止める（その部位は kPlug の判定に当たらなくなる）、Capsule = 止めて同じ大きさのカプセルに差し替える（形は少し太るが部位の判定は残る）。KKABMX で関節に縦横で違う大きさの修飾があるカードで、Unity 5.6 が MeshCollider を作り直すため1本 約0.7ms/f かかる問題への対策。KK・KKP の通常・VR が対象。ゲーム中に切り替え可（Keep に戻すと MeshCollider を元に戻す）。");
             EnableKokanNaNGuard = Config.Bind(
                 "KokanNaNGuard", "EnableKokanNaNGuard", true,
                 "kPlug / kPlugVR の KokanBehavior が、挿入中に女の子の cf_j_kokan の大きさを 0・負・NaN にしてしまう問題の回避策（v1.15.0）。kPlug は男の腰の1フレームの移動量を時間で割って押しつぶしを足すため、時間が0のときや、VR で頭を大きく動かしたときなどに値が壊れ、kPlugVR が付けるコライダー（Kokan_root/Kokan）で Unity の警告「Infinity or NaN … for a Collider」が毎フレーム出ます（ログの肥大化。後背位の挿入中に多い）。有効な場合は、そのような計算を飛ばし、壊れた値を待機の値・範囲内の値に直します。最初の1回は値を詳しく、その後は30秒ごとに回数をログ出力します。変更はゲーム再起動後に反映されます。");
@@ -277,6 +284,10 @@ namespace kPlugPatcher_InviteChrID
                 "LazyInviteCardList", "ReleaseInviteMenuFaces", true,
                 "Hシーンが終わって kPlug の招待メニュー（通常モードの InviteUI）が破棄されるときに、顔画像のテクスチャも破棄するかどうか（v1.17.0）。kPlug は破棄しないうえ、古い InviteUI への参照が残るため、顔画像が Hシーンを出た後もタイトルに戻っても残ります。EnableLazyInviteCardList が有効なときだけ働きます。");
             VRMenuFlickerDiagnostics.BindConfig(Config);
+            VRMenuRayFix.BindConfig(Config);
+            KPlugSceneSearchCache.BindConfig(Config);
+            InvitedCharacterShadows.BindConfig(Config);
+            VRCoordinateListCache.BindConfig(Config);
             ShowSameNameCardsInInviteList = Config.Bind(
                 "InviteCard", "ShowSameNameCardsInInviteList", true,
                 "在席中のキャラクター（メインヒロイン・セカンドヒロイン・招待済み）と同じ名前のカードも、招待リストに表示するかどうか（v1.8.2）。kPlug は InviteUI.IsAlreadyInHarem で名前が一致するカードを一覧から外しますが、本プラグインは招待の瞬間にカードを複製して改名するため、同名でも別個体として扱えます。対象はカード一覧（女性・男性）だけで、ストーリー／デート相手のヒロイン（セーブデータ由来で改名しない）は従来どおり除外されます。無効にすると kPlug 本来の動作に戻ります。変更はゲーム再起動後に反映されます。");
@@ -481,6 +492,8 @@ namespace kPlugPatcher_InviteChrID
 
             KPlugMemoryDiagnostics.Tick();
             KPlugPerfDiagnostics.Tick();
+            ZeroBodyOffsetOptimization.Tick();
+            InvitedCharacterShadows.Tick();
 
             // kPlugVR 向けの null ガードだけは、下の 300 フレーム待ちを使わずに、型が見つかり次第適用する。
             // 【G】【H】の対象は「タイトル画面で作られた VRCtrl が自分を破棄するフレーム」で、
@@ -488,10 +501,22 @@ namespace kPlugPatcher_InviteChrID
             // 二重適用は KPlugVRNullGuards 側の適用済みキーで防いでいるため、繰り返し呼んでよい。
             if (!_patched && Time.frameCount >= _nextGuardAttemptFrame
                 && (AnyNullGuardEnabled() || EnableLazyInviteCardList.Value || EnableKPlugMemoryDiagnostics.Value
-                    || EnableMultiGuestKiss.Value || EnableStuckGuestKissFix.Value || VRMenuFlickerDiagnostics.EnableOrDrawOrder))
+                    || EnableMultiGuestKiss.Value || EnableStuckGuestKissFix.Value || VRMenuFlickerDiagnostics.EnableOrDrawOrder
+                    || VRMenuRayFix.Pending || KPlugSceneSearchCache.Pending || VRCoordinateListCache.Pending))
             {
                 _nextGuardAttemptFrame = Time.frameCount + GuardAttemptIntervalFrames;
                 if (AnyNullGuardEnabled()) KPlugVRNullGuards.TryApply(GetHarmony());
+
+                // タイトル画面の kPlugVR のメニューのレイ（v1.21.0）。タイトルのメニューより前に当てるため、300 フレーム待ちを使わない（VR のプロセスだけ）。
+                // 設定はゲーム中に切り替えられるので、設定にかかわらず当てる。
+                VRMenuRayFix.TryApply(GetHarmony());
+
+                // 通常版 kPlug の毎フレームのシーン全体の検索の置き換え（v1.22.0、通常モードのみ）。
+                // HFlag.Start と MenuCtrl のコンストラクタで対象を覚えるため、最初の Hシーンより前に当てる。設定はゲーム中に切り替えられるので、設定にかかわらず当てる。
+                KPlugSceneSearchCache.TryApply(GetHarmony());
+
+                // kPlugVR の衣装一覧の使い回し（v1.23.0、VR のみ）。MCosplay.Init は Hシーンへ入るときに呼ばれるので、それより前に当てる。設定はゲーム中に切り替えられるので、設定にかかわらず当てる。
+                VRCoordinateListCache.TryApply(GetHarmony());
 
                 // 招待キャラ複数との同時キス（kPlugVR の HCtrl.ParseTouchables）。VR の型が見つかり次第適用する。
                 MultiGuestKiss.TryApply(GetHarmony());
@@ -688,6 +713,9 @@ namespace kPlugPatcher_InviteChrID
             {
                 MotionIKNullTargetGuard.TryApplyGame(harmony);
             }
+
+            // 設定が Keep でも、ゲーム中に切り替えられるように適用する。
+            KPlugBodyColliderCapsule.TryApply(harmony);
 
             // 挿入中に cf_j_kokan の大きさが壊れる（Kokan_root/Kokan の NaN の警告）問題の回避策
             if (EnableKokanNaNGuard.Value)

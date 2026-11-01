@@ -47,6 +47,8 @@
     <Compile Include="ParentObjectCtrlStaleRefFix.cs" />
     <Compile Include="MotionIKNullTargetGuard.cs" />
     <Compile Include="KokanNaNGuard.cs" />
+    <Compile Include="KPlugBodyColliderCapsule.cs" />
+    <Compile Include="ZeroBodyOffsetOptimization.cs" />
     <Compile Include="KPlugVRNullGuards.cs" />
     <Compile Include="SpotCtrlAdaptColDiagnostics.cs" />
     <Compile Include="VRInviteMenuUnblock.cs" />
@@ -64,6 +66,10 @@
     <Compile Include="MenuInviteFaceShrink.cs" />
     <Compile Include="InviteUIFaceShrink.cs" />
     <Compile Include="VRMenuFlickerDiagnostics.cs" />
+    <Compile Include="VRMenuRayFix.cs" />
+    <Compile Include="KPlugSceneSearchCache.cs" />
+    <Compile Include="InvitedCharacterShadows.cs" />
+    <Compile Include="VRCoordinateListCache.cs" />
   </ItemGroup>
 
   <ItemGroup>
