@@ -69,6 +69,25 @@
     <Compile Include="VRMenuRayFix.cs" />
     <Compile Include="KPlugSceneSearchCache.cs" />
     <Compile Include="InvitedCharacterShadows.cs" />
+    <Compile Include="AnimatorControllerCache.cs" />
+    <Compile Include="MapFloorColliders.cs" />
+    <Compile Include="TitleConfigRecreate.cs" />
+    <Compile Include="RealignAccess.cs" />
+    <Compile Include="RealignHotkey.cs" />
+    <Compile Include="StartPoseRules.cs" />
+    <Compile Include="StartPoseFix.cs" />
+    <Compile Include="PoseMenuScope.cs" />
+    <Compile Include="PoseMenuCache.cs" />
+    <Compile Include="PoseMenuAccess.cs" />
+    <Compile Include="PoseUnlock.cs" />
+    <Compile Include="PoseAIChoices.cs" />
+    <Compile Include="PoseAIAccess.cs" />
+    <Compile Include="PoseAI.cs" />
+    <Compile Include="VRPoseContext.cs" />
+    <Compile Include="VRPoseUnlock.cs" />
+    <Compile Include="VRPoseMenuAccess.cs" />
+    <Compile Include="VRPoseMenu.cs" />
+    <Compile Include="RandomInviteSkipPresent.cs" />
     <Compile Include="VRCoordinateListCache.cs" />
   </ItemGroup>
 

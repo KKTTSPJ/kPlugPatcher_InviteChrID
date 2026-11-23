@@ -92,6 +92,17 @@
 - **kPlugVR の衣装一覧を使い回す (v1.23.0、`CacheVRCoordinateList`)**: kPlugVR（3.599 以降）の衣装メニュー（Cosplay）は、一覧を作るたびに `UserData/coordinate` の全カードを完全に読み、サムネイルを作り直します（124件で約3秒、メモリが1回ごとに約1.2〜1.6GB 増え、古いサムネイルは破棄されない）。前回から大きさと更新日時が変わっていないカードは前回の項目を使い回し、新しい・変わったカードだけを読みます。衣装カードかどうかは、カードの先頭だけを読んで決めます。消えた・変わったカードのサムネイルは破棄します。衣装を着せるときは、今までどおり kPlugVR がファイルから読みます。KK VR で、1回目 124件 約0.7秒（メモリの増加なし）、2回目から使い回して約10ms、カードを足したときは足した分だけ読むことを確認しました。VR のみが対象です。kPlugVR 3.5.6 には衣装一覧が無いので何もしません。
 - **キャラメニューを開いたまま着替えたときの毎フレーム NRE の回避 (v1.23.1)**: kPlugVR（3.599 以降）のキャラメニューは、開いたときにキャラの胴体の骨を覚えて、毎フレームその位置に付いていきます。メニューを開いたまま着替えて骨が作り直されると（Mod Bone Implantor の骨を持つキャラなど）、`BonesCtrl` は上の回避策で直っても、メニューは破棄された骨を持ったまま毎フレーム NRE になり、メニューを閉じる処理より前で止まるため、Hシーンを出るまで閉じられませんでした。骨が破棄されていれば、`BonesCtrl` の骨を覚え直します。`EnableCoordinateChangeStaleRefFix` に従います。VR のみが対象です。KK VR で、メニューを開いたまま14回着替えて、14回とも覚え直し、この NRE が 0件（修正前は 3,934件）になり、メニューを閉じられることを確認しました。
 
+- **Hシーンのモーションのコントローラーを使い回す (v1.24.0〜、`AnimatorControllerCache`、KK 通常版で確認)**: ゲームの `ChaControl.LoadAnimation` は読むたびにコントローラーとクリップの新しいコピーを作り、H の間は着替えるか H を出るまで残ります。招待キャラのポーズ・ダンス・体位を変えるたびに約22MB ずつ増え、6人のダンスを2分変え続けると +2.6GB でした。H の間だけ、種類ごとに最初に読んだ物を使い回します。v1.24.1 から、主の女性のダンスなど kPlug が直接読む経路も対象です（1回 約55MB → 約3MB）。`[AnimatorControllerCache] EnableInH`（既定 true）。KKP・VR は未確認です。
+- **追加マップの床に当たり判定を足す (v1.25.0、`MapFloorColliders`、KK 通常版で確認)**: 当たり判定の無い床のメッシュの上では、kPlug が招待キャラを下の地面に置き、床に埋まって見えます。名前が設定のキーワードを含む見た目のメッシュへ当たり判定を足します。`[MapFloorColliders] FloorMeshKeywords`（既定 `station_home`、カンマ区切り、空にすると何もしない）。
+- **タイトル画面の「ランキングに参加」から戻った後の例外を止める (v1.26.0、`TitleConfigRecreate`、通常モード)**: 戻った後、kPlug がタイトルで作る設定の部品がシーンと一緒に消えたのに作り直しの印が残り、`kPlug.Core.Update` が毎フレーム例外を出します。部品が消えていたら印を下ろし、kPlug に作り直させます。`[TitleConfigRecreate] EnableTitleConfigRecreate`（既定 true）。
+- **Ctrl+I（ランダム招待）で居る子を候補から外す (v1.26.1、`RandomInviteSkipPresent`、通常モードのフリーH)**: 本プラグインは招待したカードを「名前 (1)」に改名し、同名カードも一覧に出すため、kPlug の判定では居る子が候補から外れず、同じ子が何度も呼ばれていました。末尾の「 (n)」を除いた名前で比べて外します。メニューから同じカードを何人も招待することは変わりません。`[InviteCard] RandomInviteSkipPresent`（既定 true）。
+- **kPlug・kPlugVR が無い環境で静かにする (v1.26.2)**: どちらも入っていない KK・KKP では、kPlug の型を探し続けず、「見つかりません」を1行出すだけにします。
+- **全体位の解放と開始体位の修正 (v1.28.0〜v1.29.1、通常モード。KK で確認、KKP は未確認)**: `[PoseUnlock] UnlockMenuPoses`（既定 true）で、kPlug の体位メニュー（愛撫・奉仕・挿入）と AI が、今の H ポイントに合う体位だけでなく全ての体位を使えます。今の H ポイントの候補を先頭にし、それ以外は表示名に `*` を付けます。AI は全候補から一様に選びます（kPlug 側の AI の体位変更の設定が要ります）。3P・レズ・暗闇・特殊な H ポイント・覗き・結果画面は対象外で、次の体位キーと自動の連鎖も変えません。家具の無い場所では体が浮く・埋まることがあります。ゲーム本来のメニューも全解放したいときは、F12 の CheatTools の「Unlock all H positions」と「Unlock invalid H positions as well」を有効にして、H を読み直してください。あわせて、これらを有効にしたときに開始体位が本棚愛撫などの特殊な体位になり、招待メニューが H の間ずっと使えなくなる問題を、H ポイントに合う体位から選び直して直します（常時有効）。
+- **VR の体位メニューと AI (v1.30.0〜v1.30.1、VR)**: 上の `UnlockMenuPoses` は、kPlugVR 3.599 以降のメニューと VR の AI にも効きます。KK VR でメニューの表示と選択を確認しました。AI の種類をまたぐ選択などは確認の途中です。3.56 の旧メニューは変えません。
+- **招待キャラの整列ホットキー (v1.28.0、通常モード)**: `[RealignHotkey] RealignShortcut`（既定は未割り当て）を押すと、kPlug の「アニメ変更後に再配置」がオフでも、kPlug 自身に全員の並べ直しを1回頼みます。抱き合わせ中の除外などは kPlug のままです。KKP・VR は未確認です。
+- **VR で目が出ない Headmod の修正と、メインヒロインを招待候補に出す (v1.30.2、VR)**: (1) `DrawMenusOnTop`（CharactersFirst）で下げたキャラの部品が、あとで透過でなくなっても戻らず、一部の頭 MOD の目が肌に隠れていました。透過でなくなった部品は元の描く順番に戻します。(2) kPlugVR 3.599 以降の招待メニューは、メイン・セカンドのカードを「招待済み」にして一覧から外します。`ShowSameNameCardsInInviteList` が有効なら一覧に戻します（招待すると「名前 (1)」）。KK VR で確認しました。
+- **UI のレイのビームを物の後ろまで伸ばす (v1.30.3、既定は v1.31.0 から、`VRMenuRaycast/BeamMode`、VR)**: ビームの線は物理レイキャストで長さが決まり、手前にキャラなどがあると後ろの UI（履歴など）まで届いて見えません（クリックは通ります）。`ToUiHit`（既定）は UI の当たりの点まで、`ThroughObjects` は物を無視して最大の長さまで伸ばし、`Off` は元のままです。見た目だけで、クリックや掴みの判定は変えません。ゲーム中に切り替えられます。KK VR・kPlugVR で確認しました。
+
 ### 併用を推奨するプラグイン（kPlug 環境の負荷対策。本プラグインの外）
 - **KK_METextureLeakFix**（自作の独立プラグイン）: KK_MaterialEditor 4.0.2 が、キャラを破棄してもテクスチャ（RenderTexture）を解放しない問題の回避策。kPlug で違うカードを招待するたびに積み上がっていた約 4GB が、Hシーンを出た後に解放されます（退出後のコミット 9.2GB → 5.4GB）。
 - **HVoiceCaching 0.3**（Picolet21、既存のプラグイン）: Hシーン開始時と、kPlug の交代で性格が変わるときの声リストの読み込み（`HVoiceCtrl.Init`、毎回約11秒）をディスクにキャッシュします。2回目以降の交代は約13秒 → 約2〜3.5秒になりました。性格の声リストを変える MOD や DLC を入れ替えたときは `BepInEx\cache\KK_HVoiceCaching` を削除してください。**0.3 には交代のたびに例外を投げる不具合があり、本プラグイン v1.8.3 以降の `EnableHVoiceCachingShortBreathFix` で回避します**（無効にして併用すると、交代を重ねるうちにキャラの声の性格が入れ替わります）。**また 3P（女の子2人）の Hシーンがロード画面のまま止まる不具合もあり、v1.9.1 以降の `EnableHVoiceCachingVoiceListFix` で回避します。**
@@ -150,8 +161,10 @@ KK版（`Release_KK`）と KKP版（`Release_KKP`）が両方ビルドされ、`
 - **v1.13.0〜v1.17.1 の確認の範囲**: v1.13.0〜v1.15.0 は KK の VR、v1.16.0（揺れものの当たり判定）は KK の通常モード・VR、v1.16.1 と v1.17.0 は KK の通常モードで確認しています。
   v1.16.1 の VR、KKP、v1.17.1 の変更（ちらつきの診断を無効にしたときの描く順番）、v1.15.0 の後背位の見た目は確認していません。
 - **v1.18.0〜v1.23.1 の確認の範囲**: v1.18.0（カプセル）は KK の通常モード・VR で差し替えのログを確認し、その後の KK・KKP の通常モード・VR のプレイで既定のまま使っています。カプセルの間の、つかみ・クリック・液体・VR の手の反応を個別に比べる確認はしていません。v1.19.0・v1.20.0 は試験版で効果を確かめ、正式版は KK の通常モード・VR で使っています。v1.21.2・v1.21.3 は KK VR、v1.22.0 は KK・KKP の通常モード、v1.23.0 は KK の通常モード・KK VR（kPlugVR 3.6.3）・KKP VR（kPlugVR 3.5.6）、v1.23.1 は KK VR・KKP VR で確認しました。v1.23.1 の通常モードの既定値の変更（`CharacterShadowsDesktop = Invited`）は、既定値だけの変更です（`Invited` の動作は v1.23.0 で確認）。
+- **v1.24.0〜v1.31.0 の確認の範囲**: v1.24.0・v1.24.1・v1.25.0・v1.26.1 は KK の通常モード、v1.26.0 は KK・KKP の通常モード（ログ）、v1.26.2 は KK・KKP（kPlug が無いとき静かになること）で確認しました。v1.28.0〜v1.29.1（開始体位・体位メニュー・AI・整列ホットキー）は KK の通常モードで確認しましたが、AI の一部と KKP は確認の途中・未確認です。v1.30.0〜v1.30.1（VR の体位）は KK VR でメニューの表示と選択を確認しました。v1.30.2〜v1.31.0 は KK VR（kPlugVR）で確認しました。
+- **設定ファイルの既存の値は変わりません**: v1.31.0 で `BeamMode` の既定を `ToUiHit` にしましたが、v1.30.3 の設定ファイルに `Off` が残っている場合は手で変えてください。
 - **既にある設定ファイルの値は変わりません**: v1.23.1 で `CharacterShadowsDesktop` の既定を `Invited` にしましたが、BepInEx は既にある設定ファイルの値を書き換えません。v1.23.0 を使っていた場合は、手で `Invited` にするか、その行を消して作り直してください。
-- **サードパーティ製チートツール`KK_CheatTools`（[ManlyMarco/IllusionCheatTools](https://github.com/ManlyMarco/IllusionCheatTools)）の「Unlock invalid H positions as well」設定が有効だと、Inviteアイコンが恒久的に無反応になります。** この設定はゲーム本体のHシーン体位絞り込み(`H.HSceneProc.CreateListAnimationFileName`)を無効化し、本来選ばれないはずのDLC専用体位が毎回Hシーン開始体位として選ばれてしまうため、kPlugの`isValidCtx`判定が`Normal`以外の値に固定されてしまいます。kPlug・本プラグインどちらの不具合でもなく、対処は当該チート設定を無効化することです。
+- **（v1.28.0 で対処済み）サードパーティ製チートツール`KK_CheatTools`（[ManlyMarco/IllusionCheatTools](https://github.com/ManlyMarco/IllusionCheatTools)）の「Unlock invalid H positions as well」設定が有効だと、Inviteアイコンが恒久的に無反応になります。** この設定はゲーム本体のHシーン体位絞り込み(`H.HSceneProc.CreateListAnimationFileName`)を無効化し、本来選ばれないはずのDLC専用体位が毎回Hシーン開始体位として選ばれてしまうため、kPlugの`isValidCtx`判定が`Normal`以外の値に固定されてしまいます。v1.28.0 以降は、本プラグインが開始体位を H ポイントに合う体位から選び直すので、この設定を有効にしたままでも招待できます（以前は当該チート設定を無効化するしかありませんでした）。
 
 ## 7. 設定項目
 
@@ -224,6 +237,13 @@ KK版（`Release_KK`）と KKP版（`Release_KKP`）が両方ビルドされ、`
 | `VRMenuRaycast` | `FixRayForKPlugMenus` | bool | `true` | タイトル画面で、kPlugVR のメニューがタイトルの UI に重なるとクリックできない問題の回避策（v1.21.0〜v1.21.3）。kPlugVR のメニューを調べるときだけ元のレイに戻す、手前か比べるときに他のキャンバスの透明な板を数えない、優先したときに手のビームをメニューまで伸ばす、の3つをまとめて切り替える。VR のみ。ゲーム中に切り替え可 |
 | `VRMenuRaycast` | `PreferKPlugMenu` | enum | `WhenNearer` | レイが kPlugVR のメニューに当たっているのに他のキャンバスが先に選ばれるとき、kPlugVR のメニューを優先するか（v1.21.1）。`Off`: 元の順番。`WhenNearer`: kPlugVR のメニューの方が手前のときだけ。`Always`: 当たっていれば常に。KK のタイトル画面では `FixRayForKPlugMenus` と両方が要る。VR のみ。ゲーム中に切り替え可 |
 | `VRMenuRaycast` | `LogRaycastHits` | bool | `false` | 確かめる用（v1.21.0）。レイの当たり先の先頭が変わったときに、上位4つと元のレイに戻した数をログに出す（シーンごとに80行まで） |
+| `AnimatorControllerCache` | `EnableInH` | bool | `true` | Hシーンの間、モーションのコントローラーを種類ごとに使い回す（v1.24.0〜） |
+| `MapFloorColliders` | `FloorMeshKeywords` | string | `station_home` | 当たり判定の無い床のメッシュに当たり判定を足す、名前のキーワード（カンマ区切り、空で無効。v1.25.0） |
+| `TitleConfigRecreate` | `EnableTitleConfigRecreate` | bool | `true` | タイトルの「ランキングに参加」から戻ったときの毎フレームの例外を止める（v1.26.0、通常モード） |
+| `InviteCard` | `RandomInviteSkipPresent` | bool | `true` | Ctrl+I で居る子を候補から外す（v1.26.1、通常モードのフリーH） |
+| `PoseUnlock` | `UnlockMenuPoses` | bool | `true` | kPlug の体位メニューと AI で、Hポイントに関係なく全体位を使えるようにする（v1.29.0〜。VR は v1.30.0〜）。ゲーム中に切り替え可 |
+| `RealignHotkey` | `RealignShortcut` | KeyboardShortcut | 未割り当て | 招待キャラの整列を kPlug に頼むキー（v1.28.0、通常モード） |
+| `VRMenuRaycast` | `BeamMode` | enum | `ToUiHit` | UI のレイのビームの長さ。`Off` / `ToUiHit` / `ThroughObjects`（v1.30.3、既定は v1.31.0 から）。ゲーム中に切り替え可 |
 | `KPlugSearchCache` | `CacheHSceneCheck` | bool | `true` | 通常版 kPlug の Hシーンの判定（`ParserScene.InH`）の、毎フレームのシーン全体の検索を、覚えておいた `HFlag` の確認に置き換える（v1.22.0）。通常モードのみ。ゲーム中に切り替え可 |
 | `KPlugSearchCache` | `CacheMenuCursorCheck` | bool | `true` | 通常版 kPlug の「カーソルがメニューの上か」の判定（`MenuCtrl.CursorIsOverMenus`）の、毎フレームのシーン全体の検索を、覚えておいた kPlug のメニューの確認に置き換える（v1.22.0）。通常モードのみ。ゲーム中に切り替え可 |
 | `KPlugSearchCache` | `VerifyIntervalFrames` | int | `300` | 上の2つが有効なとき、何フレームごとに元の全体検索で照合するか（0〜100000。0 はシーンの読み込み後だけ）。食い違えばログに出して覚え直す |
@@ -244,5 +264,5 @@ KK版（`Release_KK`）と KKP版（`Release_KKP`）が両方ビルドされ、`
 - 本プラグインは kPlug の動作を実行時に書き換えます。**kPlug のバージョンが変わると対象のメソッドが見つからず、機能の一部または全部が無効になることがあります**（その場合はログに理由が出ます）。
 
 ---
-作成日時: 2026年6月11日 / 最終更新: 2026年11月1日 (v1.23.1)
+作成日時: 2026年6月11日 / 最終更新: 2026年11月23日 (v1.31.0)
 作成者: Gemini CLI / Claude Opus 5

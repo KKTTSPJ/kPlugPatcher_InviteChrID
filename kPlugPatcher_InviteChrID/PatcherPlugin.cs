@@ -52,7 +52,7 @@ namespace kPlugPatcher_InviteChrID
         private const string LegacyGuid = "com.your.kkp.kplugpatcher";
         public const string PluginName = "KKP kPlug Patcher Invite ChrID";
 #endif
-        public const string Version = "1.23.1";
+        public const string Version = "1.31.0";
 
         internal static new ManualLogSource Logger;
         internal static bool IsQuitting = false;
@@ -288,6 +288,12 @@ namespace kPlugPatcher_InviteChrID
             KPlugSceneSearchCache.BindConfig(Config);
             InvitedCharacterShadows.BindConfig(Config);
             VRCoordinateListCache.BindConfig(Config);
+            AnimatorControllerCache.BindConfig(Config);
+            MapFloorColliders.BindConfig(Config);
+            TitleConfigRecreate.BindConfig(Config);
+            RealignHotkey.BindConfig(Config);
+            PoseUnlock.BindConfig(Config);
+            RandomInviteSkipPresent.BindConfig(Config);
             ShowSameNameCardsInInviteList = Config.Bind(
                 "InviteCard", "ShowSameNameCardsInInviteList", true,
                 "在席中のキャラクター（メインヒロイン・セカンドヒロイン・招待済み）と同じ名前のカードも、招待リストに表示するかどうか（v1.8.2）。kPlug は InviteUI.IsAlreadyInHarem で名前が一致するカードを一覧から外しますが、本プラグインは招待の瞬間にカードを複製して改名するため、同名でも別個体として扱えます。対象はカード一覧（女性・男性）だけで、ストーリー／デート相手のヒロイン（セーブデータ由来で改名しない）は従来どおり除外されます。無効にすると kPlug 本来の動作に戻ります。変更はゲーム再起動後に反映されます。");
@@ -413,12 +419,8 @@ namespace kPlugPatcher_InviteChrID
                 "MultiGuestKiss", "EnableStuckGuestKissFix", true,
                 "kPlugVR で、キスの相手が同じフレームで別の招待キャラに直接替わると、前の相手のキス終了（FinishKiss）が呼ばれず、離れてもキス状態のまま残る問題の後始末（v1.9.0）。kPlug のキスの相手でも同時キスの対象でもないのにキス状態のキャラのキスを終わらせます（KK_CyuVR では、残っていたキャラの口と舌が動き続けていました）。EnableMultiGuestKiss とは別に切り替えられます。VRモードのみ対象。変更はゲーム再起動後に反映されます。");
 
-            if (!IsKPlugLoaded())
-            {
-                Logger.LogWarning("kPlugのアセンブリが見つかりません。kPlugがインストールされていないため、このプラグインを無効化します。");
-                _kPlugMissing = true;
-                this.enabled = false;
-            }
+            // kPlug の有無は最初の Update で決める（CheckKPlugInstalledOnce）。
+            // ここでは決めない: kPlugVR はこのプラグインより後に読み込まれるため、Awake の時点ではまだ見えない（v1.26.2）。
         }
 
         /// <summary>OnApplicationQuit が呼ばれたフレーム。終了が取り消されたかの判定に使う。</summary>
@@ -450,13 +452,50 @@ namespace kPlugPatcher_InviteChrID
             return true;
         }
 
-        private bool IsKPlugLoaded()
+        /// <summary>kPlug（通常版）と kPlugVR の BepInPlugin の GUID。</summary>
+        private const string KPlugGuid = "kPlug.Katarsys";
+        private const string KPlugVRGuid = "kPlugVR.Katarsys";
+
+        private bool _kPlugChecked = false;
+
+        /// <summary>
+        /// kPlug / kPlugVR が入っているかを1回だけ確かめ、どちらも無ければ本プラグインを止める（v1.26.2）。
+        /// 最初の Update で呼ぶ。BepInEx の Chainloader は全プラグインの読み込みを1回の呼び出しの中で終えるため、
+        /// 最初の Update の時点では、このプラグインより後に読み込まれる kPlugVR も見える。
+        ///
+        /// v1.26.1 までは Awake で「名前に kPlug を含むアセンブリがあるか」を見ていたが、
+        /// このプラグイン自身（kPlugPatcher_InviteChrID）が一致するため常に true になり、
+        /// kPlug の無い KK / KKP でも型の検索（AccessTools.TypeByName など、全アセンブリを走査する）を
+        /// 15 フレームごとに続けていた（KK で警告 69 行、KKP で GetTypesFromAssembly の例外の行 262 行。
+        /// 300 フレーム目以降の Dealer の検索が 60 秒で諦めるまで続く）。
+        /// </summary>
+        private void CheckKPlugInstalledOnce()
+        {
+            if (_kPlugChecked) return;
+            _kPlugChecked = true;
+            if (IsKPlugLoaded()) return;
+
+            // kPlug に依存する再試行（各 TryApply の Pending と 300 フレーム目以降の Dealer の検索）をすべて止める。
+            // 本プラグインの処理はすべて kPlug がある前提なので、Update ごと止める。
+            _kPlugMissing = true;
+            Logger.LogInfo($"{PluginName}: kPlug / kPlugVR が見つかりません（{KPlugGuid} / {KPlugVRGuid}）。kPlug が入っていない環境のため、kPlug の型の検索とパッチの適用を行いません。");
+            this.enabled = false;
+        }
+
+        private static bool IsKPlugLoaded()
         {
             // kPlugVR も対象に含める。VRモード実行時は kPlugVR.dll 独自の Dealer クラス
             // (kPlugVR.CmpBase.Dealer) が使われ、非VR版 kPlug.dll の Dealer とは別の型のため、
             // どちらか一方でも見つかれば有効とする。
-            return AppDomain.CurrentDomain.GetAssemblies()
-                .Any(a => a.FullName.Contains("kPlug"));
+            var plugins = BepInEx.Bootstrap.Chainloader.PluginInfos;
+            if (plugins.ContainsKey(KPlugGuid) || plugins.ContainsKey(KPlugVRGuid)) return true;
+
+            // 念のため、アセンブリの名前でも確かめる（完全一致。本プラグイン自身の kPlugPatcher_… は一致しない）。
+            return AppDomain.CurrentDomain.GetAssemblies().Any(a =>
+            {
+                var name = a.GetName().Name;
+                return name == "kPlug" || name == "kPlugVR";
+            });
         }
 
         private Harmony _harmony;
@@ -487,6 +526,7 @@ namespace kPlugPatcher_InviteChrID
 
         private void Update()
         {
+            CheckKPlugInstalledOnce();
             ResetQuittingIfCancelled();
             if (IsQuitting || _kPlugMissing) return;
 
@@ -494,6 +534,9 @@ namespace kPlugPatcher_InviteChrID
             KPlugPerfDiagnostics.Tick();
             ZeroBodyOffsetOptimization.Tick();
             InvitedCharacterShadows.Tick();
+            AnimatorControllerCache.OnUpdate();
+            RealignHotkey.Tick();
+            VRPoseUnlock.Tick();
 
             // kPlugVR 向けの null ガードだけは、下の 300 フレーム待ちを使わずに、型が見つかり次第適用する。
             // 【G】【H】の対象は「タイトル画面で作られた VRCtrl が自分を破棄するフレーム」で、
@@ -502,7 +545,9 @@ namespace kPlugPatcher_InviteChrID
             if (!_patched && Time.frameCount >= _nextGuardAttemptFrame
                 && (AnyNullGuardEnabled() || EnableLazyInviteCardList.Value || EnableKPlugMemoryDiagnostics.Value
                     || EnableMultiGuestKiss.Value || EnableStuckGuestKissFix.Value || VRMenuFlickerDiagnostics.EnableOrDrawOrder
-                    || VRMenuRayFix.Pending || KPlugSceneSearchCache.Pending || VRCoordinateListCache.Pending))
+                    || VRMenuRayFix.Pending || KPlugSceneSearchCache.Pending || VRCoordinateListCache.Pending
+                    || AnimatorControllerCache.KPlugPending || MapFloorColliders.Pending || TitleConfigRecreate.Pending
+                    || RealignHotkey.Pending || StartPoseFix.Pending || PoseUnlock.Pending))
             {
                 _nextGuardAttemptFrame = Time.frameCount + GuardAttemptIntervalFrames;
                 if (AnyNullGuardEnabled()) KPlugVRNullGuards.TryApply(GetHarmony());
@@ -517,6 +562,21 @@ namespace kPlugPatcher_InviteChrID
 
                 // kPlugVR の衣装一覧の使い回し（v1.23.0、VR のみ）。MCosplay.Init は Hシーンへ入るときに呼ばれるので、それより前に当てる。設定はゲーム中に切り替えられるので、設定にかかわらず当てる。
                 VRCoordinateListCache.TryApply(GetHarmony());
+
+                // 主の女性のダンスなど、kPlug が直接読むモーションのコントローラーの使い回し（v1.24.1）。設定はゲーム中に切り替えられるので、設定にかかわらず当てる。
+                AnimatorControllerCache.TryApplyKPlug(GetHarmony());
+
+                // 追加マップの床の見た目に当たり判定を足す（v1.25.0）。ToolMaps.MapCustom は Hシーンの開始で呼ばれるので、それより前に当てる。設定はゲーム中に切り替えられるので、設定にかかわらず当てる。
+                MapFloorColliders.TryApply(GetHarmony());
+
+                // タイトル →「ランキングに参加」→ タイトルで kPlug の設定の部品が消えたままになる問題（v1.26.0、通常モードのみ）。タイトル画面で効くので早く当てる。
+                TitleConfigRecreate.TryApply(GetHarmony());
+                RealignHotkey.TryApply(GetHarmony());
+                StartPoseFix.TryApply(GetHarmony());
+                PoseUnlock.TryApply(GetHarmony());
+
+                // Ctrl+I（ランダム招待）で居る子を候補から外す（v1.26.1、通常モードのみ）。設定はゲーム中に切り替えられるので、設定にかかわらず当てる。
+                RandomInviteSkipPresent.TryApply(GetHarmony());
 
                 // 招待キャラ複数との同時キス（kPlugVR の HCtrl.ParseTouchables）。VR の型が見つかり次第適用する。
                 MultiGuestKiss.TryApply(GetHarmony());
@@ -533,7 +593,8 @@ namespace kPlugPatcher_InviteChrID
                 if (EnableKPlugMemoryDiagnostics.Value) KPlugMemoryDiagnostics.TryApply(GetHarmony());
 
                 // 在席判定は招待メニューの組み立て時（InviteUI.Start の直後）に呼ばれるため、ここで適用する
-                if (ShowSameNameCardsInInviteList.Value) InviteListSameNameUnblock.TryApply(GetHarmony());
+                // v1.26.1: ランダム招待の候補の判定も同じパッチで行うので、RandomInviteSkipPresent が当たっていれば同名カードの表示が無効でも当てる
+                if (ShowSameNameCardsInInviteList.Value || RandomInviteSkipPresent.Applied) InviteListSameNameUnblock.TryApply(GetHarmony());
             }
 
             if (_patched) return;
@@ -617,7 +678,7 @@ namespace kPlugPatcher_InviteChrID
             }
 
             // 新VRの招待UIは「招待済みのカードを一覧から外す」方式のため、改名だけでは複数招待できない。
-            if (EnableVRInviteMenuUnblock.Value)
+            if (EnableVRInviteMenuUnblock.Value || ShowSameNameCardsInInviteList.Value)
             {
                 VRInviteMenuUnblock.TryApply(harmony);
             }
@@ -630,6 +691,9 @@ namespace kPlugPatcher_InviteChrID
 
             // 揺れものの当たり判定を、結果を変えずに軽くする（設定はゲーム中に切り替えられるので、常に当てる）
             DynamicBoneColliderCache.TryApply(harmony);
+
+            // H の間、モーションのコントローラーを使い回す（v1.24.0。ゲームの ChaControl.LoadAnimation だけを見る）
+            AnimatorControllerCache.TryApply(harmony);
 
             // HVoiceCaching が交代のたびに HVoiceCtrl.Init の中で例外を投げ、交代処理の後半が飛ぶ問題の回避策。
             // HVoiceCaching の読み込みが終わっている必要があるため（Chainloader.PluginInfos で有無を見る）、ここで適用する。

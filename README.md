@@ -11,7 +11,7 @@ The patch and the document are MIT-licensed, so any part of them can be taken in
 
 - Games: `Koikatu` / `KoikatuVR` (`kPlugPatcher_InviteChrID.dll`), `Koikatsu Party` / `Koikatsu Party VR` (`kPlugPatcher_InviteChrID_KKP.dll`)
 - kPlug versions: 3.5.6 (tested in game, normal and VR) and 3.6.3 including the 2026-10-19 update (patches applied in normal and VR; the newer API is detected by type, not by version number)
-- Version: 1.23.1
+- Version: 1.31.0
 
 ## What it fixes
 
@@ -39,9 +39,18 @@ The patch and the document are MIT-licensed, so any part of them can be taken in
 | Character shadows cost GPU time in H with many girls | Turn off shadow casting of invited girls (default, VR and normal mode) or of everyone during H; restored when turned off or when H ends |
 | kPlugVR coordinate menu reads every coordinate card fully each time it builds the list (124 cards: about 3 s and +1.2 to 1.6 GB) | Reuse the entries of unchanged cards and read only new or changed cards (VR) |
 | kPlugVR character menu throws every frame and cannot be closed after a costume change rebuilds the bones while it is open | Re-take the bone from `BonesCtrl` (VR) |
+| Frame time: every H animation change copies the motion controllers (about 22 MB each; +2.6 GB in two minutes with six invited girls dancing) | Reuse the first copy per kind while in H, also for the paths kPlug loads directly (KK normal mode) |
+| Invited girls sink into the ground on added maps whose floor mesh has no collider | Add a collider to the floor meshes named in the config (default: one station map) |
+| Title screen: after "Join ranking" and back, `kPlug.Core.Update` throws every frame (normal mode) | Let kPlug recreate its title config when it was destroyed with the scene |
+| Ctrl+I (random invite) picks girls who are already present again and again | Exclude present girls by name, ignoring the " (n)" suffix this plugin adds (normal mode, free H) |
+| With CheatTools "Unlock invalid H positions as well", the start pose can become a special one and the invite menu stays disabled for the whole H | Pick the start pose again from the poses that fit the H point (normal mode and VR) |
+| kPlug pose menu and AI only offer poses that fit the H point | Optionally offer all poses (extra ones marked with `*`); the AI chooses uniformly (normal mode; VR menu of kPlugVR 3.599+ and VR AI; off-by-config) |
+| No way to ask kPlug to line up the invited girls again at a chosen moment | Hotkey that requests kPlug's own repositioning once (normal mode, unassigned by default) |
+| VR: some head mods lose their eyes while `DrawMenusOnTop` is on; the main/second heroine cannot be invited again (kPlugVR 3.599+) | Restore parts that stopped being transparent; show their cards in the invite list again |
+| VR: the UI ray beam stops in front of characters, so UI behind them looks unreachable | Extend the beam to the UI hit point (default) or through everything (visual only) |
 
 Each workaround can be turned off in the config. Diagnostics (logging only) are off by default.
-Tested in game: 1.13.0 to 1.15.0 in KK VR, 1.16.0 in KK normal mode and VR, 1.16.1 and 1.17.0 in KK normal mode, 1.21.2 and 1.21.3 in KK VR, 1.22.0 in KK and KKP normal mode, 1.23.0 in KK normal mode, KK VR (kPlugVR 3.6.3) and KKP VR (kPlugVR 3.5.6), 1.23.1 in KK VR and KKP VR.
+Tested in game: 1.24.0 and 1.24.1 in KK normal mode, 1.25.0 in KK normal mode, 1.26.0 in KK and KKP normal mode (logs), 1.26.1 in KK normal mode, 1.26.2 in KK and KKP (plugin stays silent without kPlug), 1.28.0 to 1.29.1 in KK normal mode (pose menu, AI and start pose; the AI part only partly), 1.30.0 to 1.30.1 in KK VR (menu shown and selectable; the rest of the VR AI is still being checked), 1.30.2 to 1.31.0 in KK VR (head mod eyes, main heroine in the invite list, beam). KKP for the pose and hotkey features is not tested. 1.13.0 to 1.15.0 in KK VR, 1.16.0 in KK normal mode and VR, 1.16.1 and 1.17.0 in KK normal mode, 1.21.2 and 1.21.3 in KK VR, 1.22.0 in KK and KKP normal mode, 1.23.0 in KK normal mode, KK VR (kPlugVR 3.6.3) and KKP VR (kPlugVR 3.5.6), 1.23.1 in KK VR and KKP VR.
 The capsules (1.18.0) and the zero-offset skip (1.19.0, 1.20.0) have been in use in KK and KKP normal mode and VR since then, but grabbing, clicking, liquid and VR hand reactions with capsules were not compared one by one. Not tested: 1.16.1 in VR, and the 1.17.1 change (VR menu draw order with the flicker diagnostics off).
 Since 1.23.1 `CharacterShadowsDesktop` defaults to `Invited`. BepInEx keeps the value already in an existing config file, so change it by hand if you used 1.23.0.
 

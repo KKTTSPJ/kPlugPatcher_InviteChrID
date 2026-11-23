@@ -45,9 +45,13 @@ namespace kPlugPatcher_InviteChrID
 
         internal enum PreferMode { Off, WhenNearer, Always }
 
+        /// <summary>UI のレイのビーム（見た目の線）の長さの方式（v1.30.3）。</summary>
+        internal enum BeamModes { Off, ToUiHit, ThroughObjects }
+
         internal static ConfigEntry<bool> FixRay;
         internal static ConfigEntry<PreferMode> Prefer;
         internal static ConfigEntry<bool> LogHits;
+        internal static ConfigEntry<BeamModes> Beam;
 
         private const string DraggablePanelName = "VRTK_UICANVAS_DRAGGABLE_PANEL";
 
@@ -55,6 +59,7 @@ namespace kPlugPatcher_InviteChrID
         private static bool _gaveUp;
         private static FieldInfo _menuGo;
         private static MethodInfo _getOrigin;
+        private static FieldInfo _maxLength;
         /// <summary>kPlugVR が作ったメニューのキャンバスの InstanceID。</summary>
         private static readonly HashSet<int> _menuCanvasIds = new HashSet<int>();
         /// <summary>要素のいちばん近いキャンバスの InstanceID → kPlugVR のメニューの中か。</summary>
@@ -79,6 +84,14 @@ namespace kPlugPatcher_InviteChrID
                 "KK のタイトルの UI は sortingOrder 50（kPlugVR のメニューは 0）で、uGUI は距離より先に sortingOrder で選ぶため、kPlugVR のメニューが手前にあってもタイトルの UI が選ばれます。" +
                 "Off: 何もしない（ゲームの元の順番）。WhenNearer: kPlugVR のメニューの方が手前にあるときだけ優先する。Always: kPlugVR のメニューに当たっていれば常に優先する。" +
                 "kPlugVR のメニューに当たっていないときは何もしません。FixRayForKPlugMenus と一緒に使います（KK のタイトル画面ではどちらも要ります）。ゲーム中に切り替えられます。");
+            Beam = config.Bind(
+                "VRMenuRaycast", "BeamMode", BeamModes.ToUiHit,
+                "VR のみ（v1.30.3）。手から出る UI のレイのビーム（見た目の線）の長さ。線の長さは物理レイキャストで決まるため、手前にキャラなどの物があると、その手前で線が止まり、" +
+                "後ろにある UI（履歴など）まで届いて見えません（クリックは UI のレイで通るので、見た目だけの問題）。" +
+                "既定は ToUiHit（kPlugVR を入れていない VR のゲームと同じ見た目）。BepInEx は設定ファイルに保存済みの値を優先するので、v1.30.3 の設定ファイルを使っている場合は手で変える。" +
+                "Off: 何もしない（元のまま）。ToUiHit: UI のレイの当たり（VRTK のキャンバスの要素）があるとき、その点まで線を伸ばす。" +
+                "ThroughObjects: 物の当たりを無視して、線をいつも最大の長さ（VRTK_StraightPointerRenderer.maximumLength）まで伸ばす。" +
+                "どちらもクリック・掴みの判定は変えません。ゲーム中に切り替えられます。");
             LogHits = config.Bind(
                 "VRMenuRaycast", "LogRaycastHits", false,
                 "VR のみ（v1.21.0）。確かめる用。レイの当たり先の先頭が変わったときに、上位4つ（キャンバス・sortingLayer・sortingOrder・距離・kPlugVR のメニューか）と、" +
@@ -124,13 +137,15 @@ namespace kPlugPatcher_InviteChrID
                 MethodInfo cast = straight != null ? AccessTools.Method(straight, "CastRayForward") : null;
                 Type baseRenderer = AccessTools.TypeByName("VRTK.VRTK_BasePointerRenderer");
                 _getOrigin = baseRenderer != null ? AccessTools.Method(baseRenderer, "GetOrigin", new[] { typeof(bool) }) : null;
+                _maxLength = straight != null ? AccessTools.Field(straight, "maximumLength") : null;
+                if (_maxLength != null && _maxLength.FieldType != typeof(float)) _maxLength = null;
                 bool beam = cast != null && cast.ReturnType == typeof(float) && _getOrigin != null && _getOrigin.ReturnType == typeof(Transform);
                 if (beam) harmony.Patch(cast, postfix: new HarmonyMethod(AccessTools.Method(typeof(VRMenuRayFix), nameof(CastRayForwardPostfix))));
                 else PatcherPlugin.Logger.LogWarning($"{Tag} VRTK_StraightPointerRenderer.CastRayForward（{cast != null}）/ GetOrigin（{_getOrigin != null}）が想定の形でないため、ビームは伸ばしません（クリックの直しは当てます）。");
 
                 PatcherPlugin.Logger.LogInfo($"{Tag} VRTK_VRInputModule.CheckRaycasts・VRTK_UIGraphicRaycaster.Raycast と kPlugVR.Menu.VRUI.CreateVRmenu に適用しました" +
                     $"（元のレイに戻す・透明な板を数えない・ビームを伸ばす={FixRay.Value}{(beam ? "" : "（ビームは適用なし）")} / " +
-                    $"kPlugVR のメニューを優先={Prefer.Value} / 当たり先のログ={LogHits.Value}。ゲーム中に切り替えられます）。");
+                    $"kPlugVR のメニューを優先={Prefer.Value} / ビームの長さ={Beam.Value}（最大長の取得={(_maxLength != null)}） / 当たり先のログ={LogHits.Value}。ゲーム中に切り替えられます）。");
             }
             catch (Exception ex)
             {
@@ -238,7 +253,8 @@ namespace kPlugPatcher_InviteChrID
                 if (__result == null) return;
                 bool log = LogHits.Value;
                 PreferMode mode = Prefer.Value;
-                if (!log && mode == PreferMode.Off) return;
+                BeamModes beamMode = Beam.Value;
+                if (!log && mode == PreferMode.Off && beamMode != BeamModes.ToUiHit) return;
                 string before = log ? Describe(__result) : null;
 
                 bool moved = false;
@@ -266,6 +282,7 @@ namespace kPlugPatcher_InviteChrID
                         RememberBeamTarget(__result[0].worldPosition);
                     }
                 }
+                if (!moved && beamMode == BeamModes.ToUiHit) RememberFirstUiHit(__result);
                 if (log) LogIfChanged(before, __result, moved);
             }
             catch (Exception ex)
@@ -301,7 +318,7 @@ namespace kPlugPatcher_InviteChrID
         private const int BeamFrames = 2;
         /// <summary>ビームの線から当たった点までの許す距離（m）。UI のレイとビームは同じコントローラーから出るが、原点の取り方が少し違うことがある。</summary>
         private const float BeamTolerance = 0.05f;
-        private static int _extended;
+        private static int _extended, _extendedThrough;
         private static int _lastBeamFrame = -100;
 
         private static void RememberBeamTarget(Vector3 point)
@@ -312,12 +329,38 @@ namespace kPlugPatcher_InviteChrID
             _lastBeamFrame = now;
         }
 
+        /// <summary>BeamMode = ToUiHit: 当たり先の先頭（VRTK の透明な板を除く）の点をビームの伸ばし先に覚える。</summary>
+        private static void RememberFirstUiHit(List<RaycastResult> results)
+        {
+            for (int i = 0; i < results.Count; i++)
+            {
+                RaycastResult r = results[i];
+                if (r.gameObject == null || r.gameObject.name == DraggablePanelName) continue;
+                RememberBeamTarget(r.worldPosition);
+                return;
+            }
+        }
+
         private static void CastRayForwardPostfix(Component __instance, ref float __result)
         {
             try
             {
                 int now = Time.frameCount;
-                if (now - _lastBeamFrame > BeamFrames || !FixRay.Value || Prefer.Value == PreferMode.Off) return;
+                BeamModes beamMode = Beam.Value;
+                if (beamMode == BeamModes.ThroughObjects)
+                {
+                    if (_maxLength == null) return;
+                    float max = (float)_maxLength.GetValue(__instance);
+                    if (max > __result + 1e-3f)
+                    {
+                        __result = max;
+                        if (_extendedThrough++ == 0)
+                            PatcherPlugin.Logger.LogInfo($"{Tag} UI のレイのビームを物の当たりを無視して最大の長さ {max:F0} m まで伸ばしました（初回。以降は出しません）。");
+                    }
+                    return;
+                }
+                if (now - _lastBeamFrame > BeamFrames) return;
+                if (beamMode != BeamModes.ToUiHit && (!FixRay.Value || Prefer.Value == PreferMode.Off)) return;
                 Transform origin = _getOrigin.Invoke(__instance, new object[] { true }) as Transform;
                 if (origin == null) return;
                 float best = -1f, nearestMiss = float.MaxValue;

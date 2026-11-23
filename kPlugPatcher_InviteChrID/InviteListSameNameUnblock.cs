@@ -28,6 +28,10 @@ namespace kPlugPatcher_InviteChrID
     /// 【<c>Heroine</c> を受ける方は触らない】ストーリー/デート相手のヒロインはセーブデータ由来で、
     /// 本プラグインは**改名しない方針**（セーブデータの氏名を汚さないため）。
     /// こちらを解除すると同名のまま2人並び、kPlug の名前をキーにした管理が壊れる。
+    ///
+    /// 【v1.26.1】ランダム招待（Ctrl+I）の候補もこの判定で作られるため、常に false だと居る子が何度でも選ばれていた。
+    /// 候補を作っている最中だけは <see cref="RandomInviteSkipPresent.TryDecide"/> に任せる。
+    /// RandomInviteSkipPresent だけが有効なときもこのパッチを当てる（ShowSameNameCardsInInviteList が無効なら、それ以外は元の判定を通す）。
     /// </summary>
     internal static class InviteListSameNameUnblock
     {
@@ -79,9 +83,10 @@ namespace kPlugPatcher_InviteChrID
                     harmony.Patch(method, prefix: new HarmonyMethod(
                         typeof(InviteListSameNameUnblock).GetMethod(nameof(IsAlreadyInHaremPrefix), BindingFlags.NonPublic | BindingFlags.Static)));
 
-                    PatcherPlugin.Logger.LogInfo(
-                        $"{Tag} {type.FullName}.{method.Name}(ChaFileControl) を「常に居ないものとして扱う」に変更しました" +
-                        $"（在席中のキャラと同名のカードも招待リストに出ます。frame={Time.frameCount}）。");
+                    PatcherPlugin.Logger.LogInfo(PatcherPlugin.ShowSameNameCardsInInviteList.Value
+                        ? $"{Tag} {type.FullName}.{method.Name}(ChaFileControl) を「常に居ないものとして扱う」に変更しました" +
+                          $"（在席中のキャラと同名のカードも招待リストに出ます。ランダム招待の候補は別に判定します。frame={Time.frameCount}）。"
+                        : $"{Tag} {type.FullName}.{method.Name}(ChaFileControl) に、ランダム招待の候補の判定だけを当てました（frame={Time.frameCount}）。");
                 }
                 catch (Exception ex)
                 {
@@ -101,9 +106,20 @@ namespace kPlugPatcher_InviteChrID
 
         /// <summary>
         /// 元の判定を実行せず false を返す。元は副作用の無い純粋な判定なので、失われる処理は無い。
+        /// v1.26.1: ランダム招待（Ctrl+I）の候補を作っている最中だけは、<see cref="RandomInviteSkipPresent"/> が
+        /// 「末尾の (n) を除いた名前で居るか」を判定する。ShowSameNameCardsInInviteList が無効のときは、それ以外は元の判定を通す。
         /// </summary>
-        private static bool IsAlreadyInHaremPrefix(ref bool __result, ChaFileControl __0)
+        private static bool IsAlreadyInHaremPrefix(object __instance, ref bool __result, ChaFileControl __0)
         {
+            bool present;
+            if (RandomInviteSkipPresent.TryDecide(__instance, __0, out present))
+            {
+                __result = present;
+                return false;
+            }
+
+            if (!PatcherPlugin.ShowSameNameCardsInInviteList.Value) return true;
+
             __result = false;
 
             if (!_loggedFirstUnblock)

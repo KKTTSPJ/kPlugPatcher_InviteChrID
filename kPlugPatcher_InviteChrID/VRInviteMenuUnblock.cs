@@ -61,6 +61,9 @@ namespace kPlugPatcher_InviteChrID
 
                 try
                 {
+                    TryPatchMainCharacters(harmony, type);
+                    if (!PatcherPlugin.EnableVRInviteMenuUnblock.Value) { _applied = true; return; }
+
                     var method = AccessTools.DeclaredMethod(type, "InviteSomeone");
                     if (method == null)
                     {
@@ -99,6 +102,68 @@ namespace kPlugPatcher_InviteChrID
                     }
                     return;
                 }
+            }
+        }
+
+        // ---------- メインヒロイン・セカンドヒロインを候補に出す（v1.30.2） ----------
+        // kPlugVR の MenuInvite.InitAndTabAndInfoInH は、H の開始情報（HStartInf.cardNames）に当たるカードの
+        // isCreated を true にして、一覧から外す。ShowSameNameCardsInInviteList は旧 API の判定用で、この経路には効かない。
+        // メニューを作る（Start）前に呼ばれるので、直後に false に戻せば一覧に出る。招待は PrefixInviteInVR が「名前 (1)」に改名する。
+
+        private static FieldInfo _girlInfosField, _initDoneField;
+        private static int _mainRestored;
+
+        private static void TryPatchMainCharacters(Harmony harmony, Type menuInvite)
+        {
+            if (!PatcherPlugin.ShowSameNameCardsInInviteList.Value) return;
+            var method = AccessTools.DeclaredMethod(menuInvite, "InitAndTabAndInfoInH");
+            _girlInfosField = AccessTools.Field(menuInvite, "girlInfos");
+            _initDoneField = AccessTools.Field(menuInvite, "isInfoInitInCurH");
+            var infoType = menuInvite.GetNestedType("ChaInfo", BindingFlags.Public | BindingFlags.NonPublic);
+            if (_isCreatedField == null && infoType != null) _isCreatedField = AccessTools.Field(infoType, "isCreated");
+            if (_chaInfoFileField == null && infoType != null) _chaInfoFileField = AccessTools.Field(infoType, "file");
+            if (method == null || _girlInfosField == null || _initDoneField == null || _isCreatedField == null)
+            {
+                PatcherPlugin.Logger.LogWarning($"{Tag} MenuInvite.InitAndTabAndInfoInH / girlInfos / isInfoInitInCurH / ChaInfo.isCreated が見つからないため、メインヒロインを候補に出す処理は当てません。");
+                return;
+            }
+            harmony.Patch(method,
+                prefix: new HarmonyMethod(typeof(VRInviteMenuUnblock).GetMethod(nameof(InitInfoPrefix), BindingFlags.NonPublic | BindingFlags.Static)),
+                postfix: new HarmonyMethod(typeof(VRInviteMenuUnblock).GetMethod(nameof(InitInfoPostfix), BindingFlags.NonPublic | BindingFlags.Static)));
+            PatcherPlugin.Logger.LogInfo($"{Tag} MenuInvite.InitAndTabAndInfoInH に「メイン・セカンドのカードも候補に出す」処理を適用しました。");
+        }
+
+        private static void InitInfoPrefix(out bool __state)
+        {
+            try { __state = _initDoneField.GetValue(null) is bool && (bool)_initDoneField.GetValue(null); }
+            catch { __state = true; }
+        }
+
+        private static void InitInfoPostfix(bool __state)
+        {
+            if (__state) return;   // この H では作成済み（招待済みのカードを戻さない）
+            try
+            {
+                var list = _girlInfosField.GetValue(null) as System.Collections.IEnumerable;
+                if (list == null) return;
+                int n = 0;
+                string names = "";
+                foreach (var info in list)
+                {
+                    if (info == null || !(_isCreatedField.GetValue(info) is bool) || !(bool)_isCreatedField.GetValue(info)) continue;
+                    _isCreatedField.SetValue(info, false);
+                    if (n++ < 3) names += (names.Length > 0 ? "、" : "") + DescribeCard(info);
+                }
+                if (n > 0)
+                {
+                    _mainRestored += n;
+                    PatcherPlugin.Logger.LogInfo($"{Tag} メイン・セカンドのカード {n} 枚を招待候補に戻しました（{names}。通算 {_mainRestored} 枚）。");
+                }
+            }
+            catch (Exception ex)
+            {
+                try { PatcherPlugin.Logger.LogWarning($"{Tag} メインヒロインを候補に戻す処理で例外（kPlug 側は継続します）: {ex.Message}"); }
+                catch { }
             }
         }
 

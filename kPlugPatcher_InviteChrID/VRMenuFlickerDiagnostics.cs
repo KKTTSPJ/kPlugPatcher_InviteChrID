@@ -739,20 +739,36 @@ namespace kPlugPatcher_InviteChrID
                 var dead = _originalCharaOrder.Where(kv => kv.Value.Key == null).Select(kv => kv.Key).ToList();
                 foreach (var id in dead) _originalCharaOrder.Remove(id);
             }
-            int lowered = 0, charas = 0;
+            int lowered = 0, charas = 0, released = 0;
             foreach (var cha in UnityEngine.Object.FindObjectsOfType<ChaControl>())
             {
                 if (cha == null) continue;
                 charas++;
                 foreach (var r in cha.GetComponentsInChildren<Renderer>(true))
                 {
-                    if (r == null || r.sortingOrder == charaOrder || !NeedsLowering(r)) continue;
+                    if (r == null) continue;
                     int id = r.GetInstanceID();
+                    // v1.30.2: 下げたあとで透過でなくなった部品（招待の途中で材料が差し替わる Headmod の目など）は元に戻す。
+                    // 戻さないと、頭の肌より先に描かれて目が隠れたままになる。
+                    KeyValuePair<Renderer, int> tracked;
+                    if (!NeedsLowering(r))
+                    {
+                        if (_originalCharaOrder.TryGetValue(id, out tracked))
+                        {
+                            r.sortingOrder = tracked.Value;
+                            _originalCharaOrder.Remove(id);
+                            released++;
+                        }
+                        continue;
+                    }
+                    if (r.sortingOrder == charaOrder) continue;
                     if (!_originalCharaOrder.ContainsKey(id)) _originalCharaOrder[id] = new KeyValuePair<Renderer, int>(r, r.sortingOrder);
                     r.sortingOrder = charaOrder;
                     lowered++;
                 }
             }
+            if (released > 0)
+                PatcherPlugin.Logger.LogInfo($"{Tag} 透過でなくなったキャラの部品 {released} 個の描く順番を元に戻しました（下げている部品は計 {_originalCharaOrder.Count} 個、frame={Time.frameCount}）。");
             if (lowered > 0)
                 PatcherPlugin.Logger.LogInfo($"{Tag} キャラの透過の部品 {lowered} 個の描く順番を {charaOrder} にしました（下げている部品は計 {_originalCharaOrder.Count} 個・キャラ {charas} 人、frame={Time.frameCount}）。");
         }
